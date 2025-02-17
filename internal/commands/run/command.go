@@ -1,4 +1,4 @@
-package configure
+package run
 
 import (
 	"fmt"
@@ -18,40 +18,10 @@ import (
 
 func NewCommand() *cli.Command {
 	return &cli.Command{
-		Name:  "configure",
-		Usage: "Registers a new runner with GitHub.",
+		Name:  "run",
+		Usage: "Starts a runner.",
 		Flags: []cli.Flag{
-			// required
-			&cli.StringFlag{
-				Name:     "name",
-				Usage:    "Name of the runner visible in the GitHub UI. Must be unique.",
-				Required: true,
-			},
-			&cli.StringFlag{
-				Name:     "label",
-				Usage:    "Label to associate with this runner.",
-				Required: true,
-			},
-
-			// one of these must be set
-			&cli.StringFlag{
-				Name:  "organization",
-				Usage: "The organization to register the runner with.",
-			},
-
-			// optional
-			&cli.StringFlag{
-				Name:     "runner-config-file",
-				Usage:    "Destination path for the runner configuration file.",
-				Value:    "./.config/runner.json",
-				Required: false,
-			},
-			&cli.StringFlag{
-				Name:     "private-key-file",
-				Usage:    "Destination path for the runner private key file.",
-				Value:    "./.config/key.pem",
-				Required: false,
-			},
+			// TODO: add flags
 		},
 		Action: run,
 	}

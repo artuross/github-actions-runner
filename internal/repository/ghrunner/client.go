@@ -9,21 +9,33 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/artuross/github-actions-runner/internal/defaults"
 	"go.opentelemetry.io/otel/trace"
 )
 
+const (
+	// TODO: may want to do it via debug.ReadBuildInfo
+	tracerName = "github.com/artuross/github-actions-runner/internal/repository/ghrunner"
+)
+
 type Repository struct {
-	baseUrl    string
 	httpClient *http.Client
 	tracer     trace.Tracer
+	baseURL    string
 }
 
-func New(traceProvider trace.TracerProvider, httpClient *http.Client, baseUrl string) *Repository {
-	return &Repository{
-		baseUrl:    strings.TrimSuffix(baseUrl, "/"),
-		httpClient: httpClient,
-		tracer:     traceProvider.Tracer("github.com/artuross/github-actions-runner/internal/repository/ghrunner"),
+func New(baseURL string, options ...func(*Repository)) *Repository {
+	repository := Repository{
+		httpClient: defaults.HTTPClient,
+		tracer:     defaults.TraceProvider.Tracer(tracerName),
+		baseURL:    getBaseURL(baseURL),
 	}
+
+	for _, apply := range options {
+		apply(&repository)
+	}
+
+	return &repository
 }
 
 func (r *Repository) Register(ctx context.Context, path string, token string) (*RunnerRegistrationResponse200, error) {
@@ -40,7 +52,7 @@ func (r *Repository) Register(ctx context.Context, path string, token string) (*
 		return nil, fmt.Errorf("ghrunner.Register marshal request body: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/actions/runner-registration", r.baseUrl)
+	url := fmt.Sprintf("%s/actions/runner-registration", r.baseURL)
 	request, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(requestBodyData))
 	if err != nil {
 		return nil, fmt.Errorf("ghrunner.Register create request: %w", err)
@@ -80,4 +92,20 @@ type RunnerRegistrationResponse200 struct {
 	Token       string `json:"token"`
 	TokenSchema string `json:"token_schema"`
 	Url         string `json:"url"`
+}
+
+func WithHTTPClient(httpClient *http.Client) func(*Repository) {
+	return func(r *Repository) {
+		r.httpClient = httpClient
+	}
+}
+
+func WithTracerProvider(tp trace.TracerProvider) func(*Repository) {
+	return func(r *Repository) {
+		r.tracer = tp.Tracer(tracerName)
+	}
+}
+
+func getBaseURL(baseUrl string) string {
+	return strings.TrimSuffix(baseUrl, "/")
 }

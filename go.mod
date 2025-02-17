@@ -3,7 +3,9 @@ module github.com/artuross/github-actions-runner
 go 1.22.5
 
 require (
+	github.com/golang-jwt/jwt/v5 v5.2.1
 	github.com/google/go-github/v69 v69.0.0
+	github.com/google/uuid v1.6.0
 	github.com/urfave/cli/v2 v2.27.5
 	go.opentelemetry.io/otel v1.34.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.34.0
@@ -18,7 +20,6 @@ require (
 	github.com/go-logr/logr v1.4.2 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/google/go-querystring v1.1.0 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.25.1 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
 	github.com/xrash/smetrics v0.0.0-20240521201337-686a1a2994c1 // indirect

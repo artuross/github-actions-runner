@@ -1,158 +1,107 @@
 package ghactions
 
 import (
-	"bytes"
 	"context"
-	"crypto/rsa"
-	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"io"
-	"math/big"
 	"net/http"
+	"net/url"
 	"strings"
 
+	"github.com/artuross/github-actions-runner/internal/defaults"
 	"go.opentelemetry.io/otel/trace"
 )
 
+const (
+	acceptJSON_51   = "application/json; api-version=5.1"
+	acceptJSON_60P2 = "application/json; api-version=6.0-preview.2"
+
+	contentTypeJSON      = "application/json"
+	contentTypeJSON_60P2 = "application/json; charset=utf-8; api-version=6.0-preview.2"
+)
+
+const (
+	// TODO: may want to do it via debug.ReadBuildInfo
+	tracerName = "github.com/artuross/github-actions-runner/internal/repository/ghactions"
+)
+
 type Repository struct {
-	baseUrl    string
 	httpClient *http.Client
 	tracer     trace.Tracer
+	baseURL    string
 }
 
-func New(traceProvider trace.TracerProvider, httpClient *http.Client, baseUrl string) *Repository {
-	return &Repository{
-		baseUrl:    strings.TrimSuffix(baseUrl, "/"),
-		httpClient: httpClient,
-		tracer:     traceProvider.Tracer("github.com/artuross/github-actions-runner/internal/repository/ghactions"),
+func New(baseURL string, options ...func(*Repository)) *Repository {
+	repository := Repository{
+		httpClient: defaults.HTTPClient,
+		tracer:     defaults.TraceProvider.Tracer(tracerName),
+		baseURL:    getBaseURL(baseURL),
 	}
+
+	for _, apply := range options {
+		apply(&repository)
+	}
+
+	return &repository
 }
 
-func (r *Repository) WithBaseURL(baseUrl string) *Repository {
+func (r *Repository) WithBaseURL(baseURL string) *Repository {
 	return &Repository{
-		baseUrl:    strings.TrimSuffix(baseUrl, "/"),
 		httpClient: r.httpClient,
 		tracer:     r.tracer,
+		baseURL:    getBaseURL(baseURL),
 	}
 }
 
-func (r *Repository) RegisterAgent(ctx context.Context, name string, label string, publicKey *rsa.PublicKey, token string) (*Response, error) {
-	ctx, span := r.tracer.Start(ctx, "RegisterAgent")
-	defer span.End()
-
-	requestBody, err := getRegisterAgentRequestBody(name, label, publicKey)
-	if err != nil {
-		return nil, fmt.Errorf("ghactions.RegisterAgent marshal request body: %w", err)
+func (r *Repository) doRequest(
+	ctx context.Context,
+	method,
+	path string,
+	queryParams url.Values,
+	headers http.Header,
+	body io.Reader,
+) (*http.Response, error) {
+	fullURL := r.baseURL + path
+	if len(queryParams) > 0 {
+		fullURL += "?" + queryParams.Encode()
 	}
 
-	url := fmt.Sprintf("%s/_apis/distributedtask/pools/1/agents", r.baseUrl)
-	request, err := http.NewRequestWithContext(ctx, "POST", url, requestBody)
+	request, err := http.NewRequestWithContext(ctx, method, fullURL, body)
 	if err != nil {
-		return nil, fmt.Errorf("ghactions.RegisterAgent create request: %w", err)
+		return nil, fmt.Errorf("create HTTP request: %w", err)
 	}
 
-	request.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
-	request.Header.Set("Accept", "application/json; api-version=6.0-preview.2")
-	request.Header.Set("Content-Type", "application/json; charset=utf-8; api-version=6.0-preview.2")
+	request.Header.Set("Accept", acceptJSON_51)
+	request.Header.Set("Content-Type", contentTypeJSON)
+
+	for key, values := range headers {
+		request.Header.Del(key)
+
+		for _, value := range values {
+			request.Header.Add(key, value)
+		}
+	}
 
 	response, err := r.httpClient.Do(request)
 	if err != nil {
-		return nil, fmt.Errorf("ghactions.RegisterAgent do request: %w", err)
-	}
-	defer response.Body.Close()
-
-	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("ghactions.RegisterAgent unexpected status code: %d", response.StatusCode)
+		return nil, fmt.Errorf("send HTTP request: %w", err)
 	}
 
-	responseBody, err := io.ReadAll(response.Body)
-	if err != nil {
-		return nil, fmt.Errorf("ghactions.RegisterAgent read response body: %w", err)
+	return response, nil
+}
+
+func WithHTTPClient(httpClient *http.Client) func(*Repository) {
+	return func(r *Repository) {
+		r.httpClient = httpClient
 	}
+}
 
-	var parsed Response
-	err = json.Unmarshal(responseBody, &parsed)
-	if err != nil {
-		return nil, fmt.Errorf("ghactions.RegisterAgent unmarshal response body: %w", err)
+func WithTracerProvider(tp trace.TracerProvider) func(*Repository) {
+	return func(r *Repository) {
+		r.tracer = tp.Tracer(tracerName)
 	}
-
-	return &parsed, nil
 }
 
-func getRegisterAgentRequestBody(name, label string, publicKey *rsa.PublicKey) (io.Reader, error) {
-	request := Request{
-		Labels: []Label{
-			{
-				Name: label,
-				Type: "user",
-			},
-		},
-		Authorization: Authorization{
-			PublicKey: PublicKey{
-				Exponent: base64.StdEncoding.EncodeToString(big.NewInt(int64(publicKey.E)).Bytes()),
-				Modulus:  base64.StdEncoding.EncodeToString(publicKey.N.Bytes()),
-			},
-		},
-		Name:              name,
-		Version:           "2.322.0",            // TODO: "NOT SET",
-		OSDescription:     "Ubuntu 22.04.5 LTS", // TODO: "NOT SET",
-		Ephemeral:         false,
-		DisableUpdate:     false, // TODO: change to true
-		Status:            0,
-		ProvisioningState: "Provisioned",
-
-		ID:             0,
-		CreatedOn:      "0001-01-01T00:00:00",
-		MaxParallelism: 1,
-	}
-
-	data, err := json.Marshal(request)
-	if err != nil {
-		return nil, fmt.Errorf("marshal request body: %w", err)
-	}
-
-	return bytes.NewReader(data), nil
-}
-
-type Label struct {
-	Name string `json:"name"`
-	Type string `json:"type"`
-}
-
-type Authorization struct {
-	PublicKey PublicKey `json:"publicKey"`
-}
-
-type PublicKey struct {
-	Exponent string `json:"exponent"`
-	Modulus  string `json:"modulus"`
-}
-
-type Request struct {
-	Labels            []Label       `json:"labels"`
-	Authorization     Authorization `json:"authorization"`
-	Name              string        `json:"name"`
-	Version           string        `json:"version"`
-	OSDescription     string        `json:"osDescription"`
-	Ephemeral         bool          `json:"ephemeral"`
-	DisableUpdate     bool          `json:"disableUpdate"`
-	Status            int           `json:"status"`
-	ProvisioningState string        `json:"provisioningState"`
-	ID                int           `json:"id"`
-	CreatedOn         string        `json:"createdOn"`
-	MaxParallelism    int           `json:"maxParallelism"`
-}
-
-type ServerAuthorization struct {
-	AuthorizationURL string `json:"authorizationUrl"`
-	ClientID         string `json:"clientId"`
-}
-
-type Response struct {
-	ID              int64               `json:"id"`
-	Name            string              `json:"name"`
-	RunnerGroupID   int64               `json:"runnerGroupId"`
-	RunnerGroupName *string             `json:"runnerGroupName"`
-	Authorization   ServerAuthorization `json:"authorization"`
+func getBaseURL(baseUrl string) string {
+	return strings.TrimSuffix(baseUrl, "/")
 }

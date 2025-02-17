@@ -4,16 +4,13 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
-	"crypto/x509"
-	"encoding/json"
-	"encoding/pem"
 	"fmt"
 	"io"
-	"os"
 
 	"github.com/artuross/github-actions-runner/internal/repository/ghactions"
 	"github.com/artuross/github-actions-runner/internal/repository/ghrest"
 	"github.com/artuross/github-actions-runner/internal/repository/ghrunner"
+	"github.com/artuross/github-actions-runner/internal/runnerconfig"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -48,7 +45,7 @@ func NewExecutor(
 }
 
 func (e *Executor) Run(ctx context.Context, config Config) error {
-	ctx, span := e.tracer.Start(ctx, "run")
+	ctx, span := e.tracer.Start(ctx, "configure")
 	defer span.End()
 
 	// TODO: rand.Reader must come from params
@@ -62,11 +59,11 @@ func (e *Executor) Run(ctx context.Context, config Config) error {
 		return fmt.Errorf("register runner: %w", err)
 	}
 
-	if err := saveConfigFile(config.RunnerConfigFilePath, runnerConfig); err != nil {
+	if err := runnerconfig.SaveConfigFile(config.RunnerConfigFilePath, runnerConfig); err != nil {
 		return fmt.Errorf("save config file: %w", err)
 	}
 
-	if err := savePrivateKeyFile(config.PrivateKeyFilePath, privateKey); err != nil {
+	if err := runnerconfig.SavePrivateKeyFile(config.PrivateKeyFilePath, privateKey); err != nil {
 		return fmt.Errorf("save private key file: %w", err)
 	}
 
@@ -88,7 +85,7 @@ func (e *Executor) fetchRegistrationToken(ctx context.Context, targetType string
 
 // use https://github.com/microsoft/azure-devops-go-api/blob/dev/azuredevops/taskagent/client.go
 // https://learn.microsoft.com/en-us/rest/api/azure/devops/distributedtask/agentclouds/list?view=azure-devops-rest-7.2
-func (e *Executor) registerRunner(ctx context.Context, cfg Config, publicKey *rsa.PublicKey) (*RunnerConfig, error) {
+func (e *Executor) registerRunner(ctx context.Context, cfg Config, publicKey *rsa.PublicKey) (*runnerconfig.Config, error) {
 	registrationToken, err := e.fetchRegistrationToken(ctx, cfg.TargetType, cfg.TargetPath)
 	if err != nil {
 		return nil, fmt.Errorf("create organization runner registration token: %w", err)
@@ -106,7 +103,7 @@ func (e *Executor) registerRunner(ctx context.Context, cfg Config, publicKey *rs
 		return nil, fmt.Errorf("register agent: %w", err)
 	}
 
-	runnerConfig := RunnerConfig{
+	runnerConfig := runnerconfig.Config{
 		AuthClientID:    agentResponse.Authorization.ClientID,
 		AuthURL:         agentResponse.Authorization.AuthorizationURL,
 		RunnerGroupID:   agentResponse.RunnerGroupID,
@@ -128,42 +125,4 @@ func generateKeyPair(random io.Reader) (*rsa.PrivateKey, *rsa.PublicKey, error) 
 	publicKey := privateKey.Public().(*rsa.PublicKey)
 
 	return privateKey, publicKey, nil
-}
-
-func saveConfigFile(path string, config *RunnerConfig) error {
-	data, err := json.MarshalIndent(config, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal runner config file: %w", err)
-	}
-
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		return fmt.Errorf("save runner config file: %w", err)
-	}
-
-	return nil
-}
-
-func savePrivateKeyFile(path string, key *rsa.PrivateKey) error {
-	pemBlock := pem.Block{
-		Type:  "RSA PRIVATE KEY",
-		Bytes: x509.MarshalPKCS1PrivateKey(key),
-	}
-
-	data := pem.EncodeToMemory(&pemBlock)
-
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		return fmt.Errorf("save private key file: %w", err)
-	}
-
-	return nil
-}
-
-type RunnerConfig struct {
-	AuthClientID    string  `json:"authClientId"`
-	AuthURL         string  `json:"authUrl"`
-	RunnerGroupID   int64   `json:"runnerGroupID"`
-	RunnerGroupName *string `json:"runnerGroupName"`
-	RunnerID        int64   `json:"runnerId"`
-	RunnerName      string  `json:"runnerName"`
-	ShardURL        string  `json:"shardUrl"`
 }
