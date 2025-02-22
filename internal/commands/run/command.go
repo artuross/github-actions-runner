@@ -1,20 +1,25 @@
 package run
 
 import (
+	"context"
+	"errors"
 	"fmt"
-	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/artuross/github-actions-runner/internal/commandinit"
-	"github.com/artuross/github-actions-runner/internal/commands/configure/config"
-	"github.com/artuross/github-actions-runner/internal/commands/configure/exec"
+	"github.com/artuross/github-actions-runner/internal/commands/run/exec"
+	"github.com/artuross/github-actions-runner/internal/oauth/actions"
 	"github.com/artuross/github-actions-runner/internal/repository/ghactions"
-	"github.com/artuross/github-actions-runner/internal/repository/ghrest"
-	"github.com/artuross/github-actions-runner/internal/repository/ghrunner"
-	"github.com/google/go-github/v69/github"
+	"github.com/artuross/github-actions-runner/internal/repository/ghbroker"
+	"github.com/artuross/github-actions-runner/internal/runnerconfig"
+	"github.com/rs/zerolog"
 	cli "github.com/urfave/cli/v2"
 	"golang.org/x/oauth2"
 )
+
+var ErrCommandFailed = errors.New("command failed")
 
 func NewCommand() *cli.Command {
 	return &cli.Command{
@@ -30,58 +35,76 @@ func NewCommand() *cli.Command {
 func run(cliCtx *cli.Context) error {
 	ctx := cliCtx.Context
 
-	cfg, err := config.Read(cliCtx, os.Getenv)
+	logger := zerolog.New(zerolog.NewConsoleWriter()).With().Timestamp().Logger().With().Str("command", "run").Logger()
+
+	// cfg, err := config.Read(cliCtx, os.Getenv)
+	// if err != nil {
+	// 	return fmt.Errorf("invalid config: %w", err)
+	// }
+
+	// config.Print(cfg)
+
+	// TODO: move to config.Read
+	runnerConfig, err := runnerconfig.ReadConfigFile("./.config/runner.json")
 	if err != nil {
-		return fmt.Errorf("invalid config: %w", err)
+		logger.Error().Err(err).Msg("read runner config file")
+		return ErrCommandFailed
 	}
 
-	config.Print(cfg)
+	// TODO: move to config.Read
+	privateKey, err := runnerconfig.ReadPrivateKeyFile("./.config/key.pem")
+	if err != nil {
+		logger.Error().Err(err).Msg("read private key file")
+		return ErrCommandFailed
+	}
 
 	traceProvider, tpShutdown, err := commandinit.NewOpenTelemetry(ctx, "runner")
 	if err != nil {
-		return fmt.Errorf("create OTEL provider: %w", err)
+		logger.Error().Err(err).Msg("init OTEL provider")
+		return ErrCommandFailed
 	}
 	defer tpShutdown(ctx)
 
-	ghAPIClient := github.NewClient(
-		oauth2.NewClient(
-			ctx,
-			oauth2.StaticTokenSource(
-				&oauth2.Token{
-					AccessToken: cfg.GithubToken,
-				},
-			),
+	httpClient := oauth2.NewClient(
+		ctx,
+		actions.NewTokenSource(
+			runnerConfig.AuthURL,
+			runnerConfig.AuthClientID,
+			privateKey,
 		),
 	)
 
-	ghRESTClient := ghrest.New(
-		ghAPIClient,
-		ghrest.WithTracerProvider(traceProvider),
-	)
-
-	ghRunnerClient := ghrunner.New(
-		"https://api.github.com",
-		ghrunner.WithHTTPClient(http.DefaultClient), // TODO: use something better
-		ghrunner.WithTracerProvider(traceProvider),
-	)
-
 	ghActionsClient := ghactions.New(
-		"https://UNKNOWN.actions.githubusercontent.com/",
-		ghactions.WithHTTPClient(http.DefaultClient), // TODO: use something better
+		runnerConfig.ShardURL,
+		ghactions.WithHTTPClient(httpClient),
 		ghactions.WithTracerProvider(traceProvider),
 	)
 
-	execConfig := exec.Config{
-		RunnerConfigFilePath: cfg.RunnerConfigFilePath,
-		PrivateKeyFilePath:   cfg.PrivateKeyFilePath,
-		TargetType:           cfg.TargetType,
-		TargetPath:           cfg.TargetPath,
-		RunnerName:           cfg.RunnerName,
-		RunnerLabel:          cfg.RunnerLabel,
-	}
+	ghBrokerClient := ghbroker.New(
+		ghbroker.WithHTTPClient(httpClient),
+		ghbroker.WithTracerProvider(traceProvider),
+	)
 
-	executor := exec.NewExecutor(ghActionsClient, ghRESTClient, ghRunnerClient, traceProvider)
-	if err := executor.Run(ctx, execConfig); err != nil {
+	executor := exec.NewExecutor(ghActionsClient, ghBrokerClient, traceProvider)
+
+	ctx, cancel := context.WithCancelCause(ctx)
+	stopChan := make(chan os.Signal, 1)
+
+	errInterrupted := errors.New("interrupted")
+
+	go func() {
+		signal.Notify(stopChan, os.Interrupt, syscall.SIGINT)
+
+		<-stopChan
+		logger.Info().Msg("received cancel signal")
+
+		// TODO: extract to another package
+		cancel(errInterrupted)
+	}()
+
+	ctx = logger.WithContext(ctx)
+
+	if err := executor.Run(ctx, runnerConfig); err != nil && !errors.Is(err, errInterrupted) {
 		return fmt.Errorf("run command: %w", err)
 	}
 

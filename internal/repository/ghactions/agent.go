@@ -10,6 +10,8 @@ import (
 	"io"
 	"math/big"
 	"net/http"
+
+	"github.com/artuross/github-actions-runner/internal/meta/version"
 )
 
 func (r *Repository) RegisterAgent(ctx context.Context, name string, label string, publicKey *rsa.PublicKey, token string) (*Response, error) {
@@ -21,15 +23,13 @@ func (r *Repository) RegisterAgent(ctx context.Context, name string, label strin
 		return nil, fmt.Errorf("ghactions.RegisterAgent marshal request body: %w", err)
 	}
 
-	url := "/_apis/distributedtask/pools/1/agents"
-
 	headers := http.Header{}
-
-	fmt.Println("setting header")
-	headers.Set("Authorization", fmt.Sprintf("Bearer %s", token))
+	headers.Set("Authorization", fmt.Sprintf("Bearer %s", token)) // TODO: add bypass transport
 	headers.Set("Accept", acceptJSON_60P2)
 	headers.Set("Content-Type", contentTypeJSON_60P2)
 
+	// TODO: poolID must be taken from param
+	url := "/_apis/distributedtask/pools/1/agents"
 	response, err := r.doRequest(ctx, "POST", url, nil, headers, requestBody)
 	if err != nil {
 		return nil, fmt.Errorf("ghactions.RegisterAgent do request: %w", err)
@@ -57,6 +57,21 @@ func (r *Repository) RegisterAgent(ctx context.Context, name string, label strin
 func getRegisterAgentRequestBody(name, label string, publicKey *rsa.PublicKey) (io.Reader, error) {
 	request := Request{
 		Labels: []Label{
+			// TODO: remove
+			{
+				Name: "self-hosted",
+				Type: "user",
+			},
+			// TODO: remove
+			{
+				Name: "Linux",
+				Type: "user",
+			},
+			// TODO: remove
+			{
+				Name: "ARM64",
+				Type: "user",
+			},
 			{
 				Name: label,
 				Type: "user",
@@ -69,8 +84,8 @@ func getRegisterAgentRequestBody(name, label string, publicKey *rsa.PublicKey) (
 			},
 		},
 		Name:              name,
-		Version:           "2.322.0",            // TODO: "NOT SET",
-		OSDescription:     "Ubuntu 22.04.5 LTS", // TODO: "NOT SET",
+		Version:           version.RunnerCompatibilityVersion, // TODO: "NOT SET",
+		OSDescription:     "Ubuntu 22.04.5 LTS",               // TODO: "NOT SET",
 		Ephemeral:         false,
 		DisableUpdate:     false, // TODO: change to true
 		Status:            0,

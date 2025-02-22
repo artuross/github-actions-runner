@@ -46,3 +46,36 @@ func SavePrivateKeyFile(path string, key *rsa.PrivateKey) error {
 
 	return nil
 }
+
+func ReadConfigFile(path string) (*Config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read runner config file: %w", err)
+	}
+
+	var config Config
+	if err := json.Unmarshal(data, &config); err != nil {
+		return nil, fmt.Errorf("unmarshal runner config file: %w", err)
+	}
+
+	return &config, nil
+}
+
+func ReadPrivateKeyFile(path string) (*rsa.PrivateKey, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read private key file: %w", err)
+	}
+
+	block, _ := pem.Decode(data)
+	if block == nil || block.Type != "RSA PRIVATE KEY" {
+		return nil, fmt.Errorf("invalid private key file")
+	}
+
+	key, err := x509.ParsePKCS1PrivateKey(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("parse private key: %w", err)
+	}
+
+	return key, nil
+}

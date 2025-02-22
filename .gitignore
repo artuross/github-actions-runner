@@ -3,3 +3,8 @@
 
 # todo: remove
 /requests/
+/records/
+/responses/
+/tmp/
+/data/
+/debug/

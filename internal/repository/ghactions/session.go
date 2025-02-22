@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+
+	"github.com/artuross/github-actions-runner/internal/meta/version"
 )
 
 type Agent struct {
@@ -30,16 +32,19 @@ type CreateSessionSuccess struct {
 	UseFipsEncryption bool
 }
 
-func (r *Repository) CreateSession(ctx context.Context, poolID int64) (*CreateSessionSuccess, error) {
+func (r *Repository) CreateSession(ctx context.Context, poolID int64, runnerID int64, runnerName string) (*CreateSessionSuccess, error) {
+	ctx, span := r.tracer.Start(ctx, "CreateSession")
+	defer span.End()
+
 	requestBody := CreateSessionBody{
 		SessionID: "00000000-0000-0000-0000-000000000000", // TODO: take from params, this appears to always be 0
 		OwnerName: "4a4fda292974 (PID: 76113)",            // TODO: take from params
 		Agent: Agent{
-			ID:            3,                    // take from params
-			Name:          "4a4fda292974",       // take from params
-			Version:       "2.322.0",            // take from params
-			OSDescription: "Ubuntu 22.04.5 LTS", // take from params
-			Ephemeral:     false,                // take from params
+			ID:            int(runnerID),                      // take from params
+			Name:          runnerName,                         // take from params
+			Version:       version.RunnerCompatibilityVersion, // take from params
+			OSDescription: "Ubuntu 22.04.5 LTS",               // take from params
+			Ephemeral:     false,                              // take from params
 		},
 		UseFipsEncryption: false,
 	}
@@ -76,6 +81,23 @@ func (r *Repository) CreateSession(ctx context.Context, poolID int64) (*CreateSe
 	}
 
 	return &respBody, nil
+}
+
+func (r *Repository) DeleteSession(ctx context.Context, poolID int64, sessionID string) error {
+	ctx, span := r.tracer.Start(ctx, "DeleteSession")
+	defer span.End()
+
+	path := fmt.Sprintf("/_apis/distributedtask/pools/%d/sessions/%s", poolID, sessionID)
+	response, err := r.doRequest(ctx, "DELETE", path, nil, nil, nil)
+	if err != nil {
+		return fmt.Errorf("do HTTP request: %w", err)
+	}
+
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("unexpected status code: %d", response.StatusCode)
+	}
+
+	return nil
 }
 
 type encryptionKey struct {
