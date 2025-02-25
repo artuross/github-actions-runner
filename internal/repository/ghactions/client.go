@@ -13,10 +13,14 @@ import (
 )
 
 const (
+	acceptJSON_20P1 = "application/json; api-version=2.0-preview.1"
 	acceptJSON_51   = "application/json; api-version=5.1"
+	acceptJSON_51P1 = "application/json; api-version=5.1-preview.1"
 	acceptJSON_60P2 = "application/json; api-version=6.0-preview.2"
 
 	contentTypeJSON      = "application/json"
+	contentTypeJSON_20P1 = "application/json; charset=utf-8; api-version=2.0-preview.1"
+	contentTypeJSON_51P1 = "application/json; charset=utf-8; api-version=5.1-preview.1"
 	contentTypeJSON_60P2 = "application/json; charset=utf-8; api-version=6.0-preview.2"
 )
 

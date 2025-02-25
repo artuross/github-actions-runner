@@ -8,14 +8,15 @@ import (
 	"sync"
 	"time"
 
+	"github.com/artuross/github-actions-runner/internal/commands/run/runner"
+	"github.com/artuross/github-actions-runner/internal/commands/run/timeline"
 	"github.com/artuross/github-actions-runner/internal/repository/ghactions"
 	"github.com/artuross/github-actions-runner/internal/repository/ghapi"
 	"github.com/artuross/github-actions-runner/internal/repository/ghbroker"
 	"github.com/artuross/github-actions-runner/internal/runnerconfig"
-	"github.com/kr/pretty"
 	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 	"go.opentelemetry.io/otel/trace"
+	"golang.org/x/oauth2"
 )
 
 type Executor struct {
@@ -162,6 +163,7 @@ func (e *Executor) Run(ctx context.Context, config *runnerconfig.Config) error {
 					continue
 				}
 
+				// TODO: must happen right after job details are fetched
 				if err := e.actionsClient.DeletePoolMessage(ctx, *sessionID, config.RunnerGroupID, msg.MessageID); err != nil {
 					logger.Error().Err(err).Msg("delete pool message")
 					continue
@@ -220,8 +222,6 @@ func (e *Executor) startJob(ctx context.Context, config *runnerconfig.Config, se
 			if !timer.Stop() {
 				<-timer.C
 			}
-
-			fmt.Println("channel drained")
 		}()
 
 		for {
@@ -246,137 +246,104 @@ func (e *Executor) startJob(ctx context.Context, config *runnerconfig.Config, se
 		}
 	}(acquireJob.LockedUntil)
 
-	// report timeline to server
-	// TODO: send items to server
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-
-		syncedTimelineItems := make([]TimelineItem, 0)
-
-		// create initial timeline
-		timelineItems := make([]TimelineItem, 0)
-
-		timelineItems = append(timelineItems, TimelineItem{
-			ID:          jobRequestMessage.JobID,
-			ParentID:    nil,
-			Type:        TypeJob,
-			Name:        jobRequestMessage.JobDisplayName,
-			ContextName: jobRequestMessage.JobName,
-			State:       StatePending,
-			Order:       1,
-		})
-
-		for index, step := range jobRequestMessage.Steps {
-			timelineItems = append(timelineItems, TimelineItem{
-				ID:          step.ID,
-				ParentID:    &jobRequestMessage.JobID,
-				Type:        TypeStep,
-				Name:        step.Name,
-				ContextName: step.ContextName,
-				State:       StatePending,
-				Order:       index + 1,
-			})
-		}
-
-		sortTimelineItems := func() {
-			slices.SortFunc(timelineItems, func(a, b TimelineItem) int {
-				// items without parents are top level items (beginning)
-				if a.ParentID == nil && b.ParentID != nil {
-					return -1
-				}
-
-				if a.ParentID != nil && b.ParentID == nil {
-					return 1
-				}
-
-				// A's parent is B
-				if a.ParentID != nil && *a.ParentID == b.ID {
-					return -1
-				}
-
-				// B's parent is A
-				if b.ParentID != nil && *b.ParentID == a.ID {
-					return 1
-				}
-
-				// otherwise sort by order
-				if a.Order < b.Order {
-					return -1
-				}
-
-				if a.Order > b.Order {
-					return 1
-				}
-
-				return 0
-			})
-		}
-
-		sortTimelineItems()
-
-		logger.Debug().Any("timeline", timelineItems).Msg("initial timeline")
-
-		_ = syncedTimelineItems
-
-		jobController := &JobController{
-			CurrentTaskStack: []*TaskDefinition{},
-			QueueMain: []*TaskDefinition{
-				{
-					ID:       jobRequestMessage.JobID,
-					ParentID: nil,
-					Task:     &Job{},
-				},
-				{
-					ID:       "pre",
-					ParentID: nil,
-					Task:     &PreTaskRunner{steps: jobRequestMessage.Steps},
-				},
+	httpClient := oauth2.NewClient(
+		ctx,
+		oauth2.StaticTokenSource(
+			&oauth2.Token{
+				AccessToken: jobRequestMessage.Resources.Endpoints[0].Authorization.Parameters.AccessToken,
 			},
-		}
+		),
+	)
 
-		for len(jobController.QueueMain) > 0 {
-			task := jobController.QueueMain[0]
-			jobController.QueueMain = jobController.QueueMain[1:]
+	jobActionsClient := ghactions.New(
+		jobRequestMessage.Resources.Endpoints[0].URL,
+		ghactions.WithHTTPClient(httpClient),
+	)
 
-			jobController.CurrentTaskStack = append(jobController.CurrentTaskStack, task)
+	timelineController := timeline.NewController(
+		jobActionsClient,
+		config.RunnerName,
+		jobRequestMessage.Plan.PlanID,
+		jobRequestMessage.Timeline.ID,
+	)
 
-			if runnable, ok := task.Task.(Runnable); ok {
-				logger.Debug().Str("task_id", task.ID).Msg("running task in controller")
+	if err := timelineController.Start(ctx); err != nil {
+		logger.Error().Err(err).Msg("start timeline controller")
+		return err
+	}
 
-				if err := runnable.Run(ctx, jobController); err != nil {
-					logger.Error().Err(err).Msg("run task")
-					continue
-				}
+	jobController := &JobController{
+		timelineController: timelineController,
+		CurrentTaskStack:   []*runner.TaskDefinition{},
+		QueueMain:          nil,
+	}
 
-				time.Sleep(2 * time.Second)
+	// register jobs
+	jobController.AddTask(
+		ctx,
+		&runner.RunnerJob{Id: jobRequestMessage.JobID},
+		nil,
+		"hello",
+		"__default",
+	)
 
-				continue
-			}
+	// TODO: is the ID generated?
+	jobController.AddTask(
+		ctx,
+		&runner.RunnerTaskInit{Id: "e57bfafe-5896-4d3f-881e-7e298f92fbee", ParentId: jobRequestMessage.JobID, Steps: jobRequestMessage.Steps},
+		&jobRequestMessage.JobID,
+		"Set up job",
+		"JobExtension_Init",
+	)
 
-			logger.Debug().Str("task_id", task.ID).Type("type", task.Task).Msg("skipping task in controller")
+	ctx, span := e.tracer.Start(ctx, "run action")
+	defer span.End()
 
-			// TODO: remove from stack
-		}
-	}()
+	if err := jobController.Run(ctx); err != nil {
+		logger.Error().Err(err).Msg("run job controller")
+		return err
+	}
 
-	pretty.Println(jobRequestMessage.Steps)
+	// shutdown timeline controller
+	if err := timelineController.Shutdown(ctx); err != nil {
+		logger.Error().Err(err).Msg("stop timeline controller")
+	}
+
+	// mark action as done
+	if err := jobActionsClient.PostEvents(ctx, jobRequestMessage.Plan.PlanID, jobRequestMessage.JobID, jobRequestMessage.RequestID); err != nil {
+		logger.Error().Err(err).Msg("post events")
+	}
+
+	cancel()
 
 	return nil
 }
 
-type TaskDefinition struct {
-	ID       string
-	ParentID *string
-	Task     Task
-}
-
 type JobController struct {
-	CurrentTaskStack []*TaskDefinition // last in first out - currently active jobs
-	QueueMain        []*TaskDefinition
+	timelineController *timeline.Controller
+	CurrentTaskStack   []*runner.TaskDefinition // last in first out - currently active jobs
+	QueueMain          []*runner.TaskDefinition
 }
 
-func (c *JobController) AddTask(ctx context.Context, task Task, parentID *string) {
+func (c *JobController) AddTask(ctx context.Context, task runner.Task, parentID *string, name, refName string) {
+	timelineRecordID := timeline.ID(task.ID())
+
+	timelineRecordParentID := (*timeline.ID)(nil)
+	if parentID != nil {
+		timelineRecordParentID = (*timeline.ID)(parentID)
+	}
+
+	timelineTaskType := timeline.TypeTask
+	if task.Type() == "job" {
+		timelineTaskType = timeline.TypeJob
+	} else if task.Type() == "task" {
+		timelineTaskType = timeline.TypeTask
+	} else {
+		timelineTaskType = "unknown"
+	}
+
+	c.timelineController.AddRecord(timelineRecordID, timelineRecordParentID, timelineTaskType, name, refName)
+
 	zerolog.Ctx(ctx).Error().Any("arr", c.QueueMain).Msg("snap")
 	zerolog.Ctx(ctx).Info().Any("task_id", task.ID()).Any("parent_id", parentID).Msg("task")
 
@@ -402,9 +369,9 @@ func (c *JobController) AddTask(ctx context.Context, task Task, parentID *string
 		}
 	}
 
-	queue := make([]*TaskDefinition, 0, len(c.QueueMain)+1)
+	queue := make([]*runner.TaskDefinition, 0, len(c.QueueMain)+1)
 	queue = append(queue, c.QueueMain[:insertIndex]...)
-	queue = append(queue, &TaskDefinition{
+	queue = append(queue, &runner.TaskDefinition{
 		ID:       task.ID(),
 		ParentID: parentID,
 		Task:     task,
@@ -416,236 +383,56 @@ func (c *JobController) AddTask(ctx context.Context, task Task, parentID *string
 	zerolog.Ctx(ctx).Error().Any("arr", c.QueueMain).Msg("post")
 }
 
+func (c *JobController) Run(ctx context.Context) error {
+	logger := zerolog.Ctx(ctx)
+
+	for len(c.QueueMain) > 0 {
+		task := c.QueueMain[0]
+		c.QueueMain = c.QueueMain[1:]
+
+		c.CurrentTaskStack = append(c.CurrentTaskStack, task)
+
+		// update timeline
+		c.timelineController.RecordStarted(timeline.ID(task.ID), time.Now())
+
+		// run task
+		if runnable, ok := task.Task.(runner.Runnable); ok {
+			logger.Debug().Str("task_id", task.ID).Msg("running task in controller")
+
+			// ctx, span := e.tracer.Start(ctx, fmt.Sprintf("run step %s", task.ID))
+			if err := runnable.Run(ctx, c); err != nil {
+				logger.Error().Err(err).Msg("run task")
+				continue
+			}
+			// span.End()
+		}
+
+		// update timeline
+		for i := len(c.CurrentTaskStack) - 1; i >= 0; i-- {
+			task := c.CurrentTaskStack[i]
+
+			// find relations
+			hasChildren := slices.ContainsFunc(c.QueueMain, func(item *runner.TaskDefinition) bool {
+				if item.ParentID == nil {
+					return false
+				}
+
+				return task.ID == *item.ParentID
+			})
+
+			if hasChildren {
+				break
+			}
+
+			// update record and remove from stack
+			c.timelineController.RecordFinished(timeline.ID(c.CurrentTaskStack[i].ID), time.Now())
+			c.CurrentTaskStack = c.CurrentTaskStack[:i]
+		}
+	}
+
+	return nil
+}
+
 type Controller interface {
-	AddTask(ctx context.Context, task Task, parentID *string)
+	AddTask(ctx context.Context, task runner.Task, parentID *string)
 }
-
-type Runnable interface {
-	Run(ctx context.Context, ctrl Controller) error
-}
-
-type (
-	CompositeTaskRunner struct {
-		id   string
-		name string
-	}
-
-	Job struct {
-		id   string
-		name string
-	}
-
-	PreTaskRunner struct {
-		id    string
-		name  string
-		steps []ghapi.Step
-	}
-
-	SimpleTaskRunner struct {
-		id   string
-		name string
-	}
-)
-
-type Task interface {
-	ID() string
-	Name() string
-	Type() string
-}
-
-func (j *CompositeTaskRunner) ID() string { return j.id }
-func (j *Job) ID() string                 { return j.id }
-func (j *PreTaskRunner) ID() string       { return j.id }
-func (j *SimpleTaskRunner) ID() string    { return j.id }
-
-func (j *CompositeTaskRunner) Name() string { return j.name }
-func (j *Job) Name() string                 { return j.name }
-func (j *PreTaskRunner) Name() string       { return j.name }
-func (j *SimpleTaskRunner) Name() string    { return j.name }
-
-func (j *Job) Type() string                 { return "job" }
-func (t *CompositeTaskRunner) Type() string { return "action" }
-func (t *PreTaskRunner) Type() string       { return "task" }
-func (t *SimpleTaskRunner) Type() string    { return "task" }
-
-func (r *PreTaskRunner) Run(ctx context.Context, ctrl Controller) error {
-	logger := log.Ctx(ctx)
-
-	logger.Debug().Msg("running pre task")
-	defer logger.Debug().Msg("completed pre task")
-
-	toProcess := make([]StepWithParentID, 0)
-	for _, step := range r.steps {
-		toProcess = append(toProcess, StepWithParentID{
-			Step: step,
-		})
-	}
-
-	for len(toProcess) > 0 {
-		current := toProcess[0]
-		toProcess = toProcess[1:]
-
-		parentID := ""
-		if current.ParentID != nil {
-			parentID = *current.ParentID
-		}
-
-		logger.Debug().
-			Str("step_id", current.Step.ID).
-			Str("parent_id", parentID).
-			Msg("processing step in pre")
-
-		// TODO: remove
-		if current.Step.Name == "__run_3" || current.Step.ID == "f5002f43-49c5-5559-6892-ae598c073a1e_2" {
-			current.Step.Type = "composite"
-		}
-
-		var task Task
-		if current.Step.Type == "composite" {
-			task = &CompositeTaskRunner{
-				id:   current.Step.ID,
-				name: current.Step.Name,
-			}
-		} else {
-			task = &SimpleTaskRunner{
-				id:   current.Step.ID,
-				name: current.Step.Name,
-			}
-		}
-
-		// adds task to processing queue
-		// add runner, not a step
-		ctrl.AddTask(ctx, task, current.ParentID)
-
-		// TODO: remove
-		if current.Step.Name == "__run_3" {
-			toProcess = append(
-				toProcess,
-				fakeChildStep(current.Step.ID, 1),
-				fakeChildStep(current.Step.ID, 2),
-			)
-
-			continue
-		}
-
-		if current.Step.ID == "f5002f43-49c5-5559-6892-ae598c073a1e_2" {
-			toProcess = append(
-				toProcess,
-				fakeChildStep(current.Step.ID, 1),
-				fakeChildStep(current.Step.ID, 2),
-				fakeChildStep(current.Step.ID, 3),
-			)
-
-			continue
-		}
-	}
-
-	return nil
-}
-
-func (r *SimpleTaskRunner) Run(ctx context.Context, _ Controller) error {
-	logger := log.Ctx(ctx)
-
-	logger.Debug().Msg("running simple task")
-	defer logger.Debug().Msg("completed simple task")
-
-	return nil
-}
-
-func fakeChildStep(parentID string, index int) StepWithParentID {
-	return StepWithParentID{
-		ParentID: &parentID,
-		Step: ghapi.Step{
-			ID:   fmt.Sprintf("%s_%d", parentID, index),
-			Type: "action",
-			Reference: ghapi.StepReference{
-				Type: "script",
-			},
-			ContextName: fmt.Sprintf("%s_%d", parentID, index),
-			Name:        fmt.Sprintf("%s_%d", parentID, index),
-		},
-	}
-}
-
-type StepWithParentID struct {
-	Step     ghapi.Step
-	ParentID *string
-}
-
-type TimelineItem struct {
-	ID          string
-	ParentID    *string
-	Type        Type
-	Name        string
-	ContextName string
-	State       State
-	Order       int
-}
-
-type Type string
-
-const (
-	TypeJob  Type = "job"
-	TypeStep Type = "step"
-)
-
-type State string
-
-const (
-	StatePending   State = "pending"
-	StateRunning   State = "running"
-	StateCompleted State = "completed"
-)
-
-type StateBase struct {
-	ID               string
-	ParentID         *string
-	Name             string
-	StartTime        *time.Time
-	FinishTime       *time.Time
-	CurrentOperation string // ??
-	PercentComplete  int
-	State            string
-	Result           string
-	ResultCode       struct{} // ??
-	ChangeID         int64
-	LastModified     time.Time
-	WorkerName       string
-	Order            int
-	RefName          string
-	Log              *struct {
-		ID       int64
-		Location *string
-	}
-	Details         struct{}            // ??
-	ErrorCount      int                 // ??
-	WarningCount    int                 // ??
-	NoticeCount     int                 // ??
-	Issues          []struct{}          // ??
-	Variables       map[string]struct{} // ??
-	Location        string
-	PreviousAttemps []struct{} // ??
-	Attempt         int
-	Identifier      *string // ??
-}
-
-type (
-	StateTask struct {
-		StateBase
-	}
-
-	StateJob struct {
-		StateBase
-		AgentPlatform string
-	}
-
-	StateStage struct {
-		StateBase
-	}
-
-	StatePhase struct {
-		StateBase
-	}
-)
-
-type TimelineController struct{}

@@ -96,13 +96,41 @@ func (w *Wrapper) UnmarshalJSON(data []byte) error {
 				Name        string                `json:"name"`
 			}
 
+			internalPlan struct {
+				PlanID string `json:"planId"`
+			}
+
+			internalTimeline struct {
+				ID string `json:"id"`
+			}
+
+			internalParameters struct {
+				AccessToken string `json:"AccessToken"`
+			}
+
+			internalAuthorization struct {
+				Parameters internalParameters `json:"parameters"`
+			}
+
+			internalEndpoint struct {
+				URL           string                `json:"url"`
+				Authorization internalAuthorization `json:"authorization"`
+			}
+
+			internalResources struct {
+				Endpoints []internalEndpoint `json:"endpoints"`
+			}
+
 			internalPipelineAgentJobRequest struct {
-				MessageType    string         `json:"messageType"`
-				JobID          string         `json:"jobId"`
-				JobDisplayName string         `json:"jobDisplayName"`
-				JobName        string         `json:"jobName"`
-				RequestID      int64          `json:"requestId"`
-				Steps          []internalStep `json:"steps"`
+				MessageType    string            `json:"messageType"`
+				JobID          string            `json:"jobId"`
+				JobDisplayName string            `json:"jobDisplayName"`
+				JobName        string            `json:"jobName"`
+				RequestID      int64             `json:"requestId"`
+				Steps          []internalStep    `json:"steps"`
+				Plan           internalPlan      `json:"plan"`
+				Timeline       internalTimeline  `json:"timeline"`
+				Resources      internalResources `json:"resources"`
 			}
 		)
 
@@ -128,6 +156,25 @@ func (w *Wrapper) UnmarshalJSON(data []byte) error {
 			return steps
 		}
 
+		convertToEndpoints := func(internalEndpoints []internalEndpoint) []ghapi.Endpoint {
+			endpoints := make([]ghapi.Endpoint, 0, len(internalEndpoints))
+
+			for _, ie := range internalEndpoints {
+				endpoint := ghapi.Endpoint{
+					URL: ie.URL,
+					Authorization: ghapi.EndpointAuthorization{
+						Parameters: ghapi.EndpointAuthorizationParameters{
+							AccessToken: ie.Authorization.Parameters.AccessToken,
+						},
+					},
+				}
+
+				endpoints = append(endpoints, endpoint)
+			}
+
+			return endpoints
+		}
+
 		var message internalPipelineAgentJobRequest
 		if err := json.Unmarshal(data, &message); err != nil {
 			return err
@@ -139,6 +186,15 @@ func (w *Wrapper) UnmarshalJSON(data []byte) error {
 			JobName:        message.JobName,
 			RequestID:      message.RequestID,
 			Steps:          convertToSteps(message.Steps),
+			Plan: ghapi.Plan{
+				PlanID: message.Plan.PlanID,
+			},
+			Timeline: ghapi.Timeline{
+				ID: message.Timeline.ID,
+			},
+			Resources: ghapi.Resources{
+				Endpoints: convertToEndpoints(message.Resources.Endpoints),
+			},
 		}
 
 		return nil

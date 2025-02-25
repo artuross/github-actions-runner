@@ -35,6 +35,9 @@ type (
 		JobName        string
 		RequestID      int64
 		Steps          []Step
+		Plan           Plan
+		Timeline       Timeline
+		Resources      Resources
 	}
 )
 
@@ -42,3 +45,28 @@ func (BrokerMessage) MessageType() MessageType           { return "BrokerMessage
 func (BrokerMigration) MessageType() MessageType         { return MessageTypeBrokerMigration }
 func (MessageRunnerJobRequest) MessageType() MessageType { return MessageTypeRunnerJobRequest }
 func (PipelineAgentJobRequest) MessageType() MessageType { return MessageTypePipelineAgentJobRequest }
+
+type Plan struct {
+	PlanID string
+}
+
+type Timeline struct {
+	ID string
+}
+
+type EndpointAuthorizationParameters struct {
+	AccessToken string
+}
+
+type EndpointAuthorization struct {
+	Parameters EndpointAuthorizationParameters
+}
+
+type Endpoint struct {
+	URL           string
+	Authorization EndpointAuthorization
+}
+
+type Resources struct {
+	Endpoints []Endpoint
+}
