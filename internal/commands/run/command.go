@@ -9,11 +9,14 @@ import (
 	"syscall"
 
 	"github.com/artuross/github-actions-runner/internal/commandinit"
-	"github.com/artuross/github-actions-runner/internal/commands/run/exec"
-	"github.com/artuross/github-actions-runner/internal/commands/run/listener"
+	"github.com/artuross/github-actions-runner/internal/commands/run/jobcontroller"
+	"github.com/artuross/github-actions-runner/internal/commands/run/joblistener"
+	"github.com/artuross/github-actions-runner/internal/commands/run/jobworker"
 	"github.com/artuross/github-actions-runner/internal/commands/run/manager"
+	"github.com/artuross/github-actions-runner/internal/commands/run/timeline"
 	"github.com/artuross/github-actions-runner/internal/oauth/actions"
 	"github.com/artuross/github-actions-runner/internal/repository/ghactions"
+	"github.com/artuross/github-actions-runner/internal/repository/ghapi"
 	"github.com/artuross/github-actions-runner/internal/repository/ghbroker"
 	"github.com/artuross/github-actions-runner/internal/runnerconfig"
 	"github.com/rs/zerolog"
@@ -104,8 +107,35 @@ func run(cliCtx *cli.Context) error {
 
 	ctx = logger.WithContext(ctx)
 
-	jobListener := listener.New(ghActionsClient, ghBrokerClient, traceProvider, runnerConfig)
-	jobWorker := exec.NewExecutor(ghActionsClient, ghBrokerClient, traceProvider, runnerConfig) // TODO: rename to worker
+	jobControllerFactory := func(jobDetails ghapi.PipelineAgentJobRequest) (*jobcontroller.JobController, error) {
+		httpClient := oauth2.NewClient(
+			ctx,
+			oauth2.StaticTokenSource(
+				&oauth2.Token{
+					AccessToken: jobDetails.Resources.Endpoints[0].Authorization.Parameters.AccessToken,
+				},
+			),
+		)
+
+		actionsClient := ghactions.New(
+			jobDetails.Resources.Endpoints[0].URL,
+			ghactions.WithHTTPClient(httpClient),
+		)
+
+		timelineController := timeline.NewController(
+			actionsClient,
+			runnerConfig.RunnerName,
+			jobDetails.Plan.PlanID,
+			jobDetails.Timeline.ID,
+		)
+
+		jobController := jobcontroller.New(timelineController, actionsClient, traceProvider)
+
+		return jobController, nil
+	}
+
+	jobListener := joblistener.New(ghActionsClient, ghBrokerClient, traceProvider, runnerConfig)
+	jobWorker := jobworker.New(ghActionsClient, ghBrokerClient, traceProvider, runnerConfig, jobControllerFactory)
 
 	jobManager := manager.New(jobListener, jobWorker)
 	if err := jobManager.Run(ctx); err != nil && !errors.Is(err, errInterrupted) {
