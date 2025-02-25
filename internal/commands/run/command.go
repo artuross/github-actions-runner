@@ -10,6 +10,8 @@ import (
 
 	"github.com/artuross/github-actions-runner/internal/commandinit"
 	"github.com/artuross/github-actions-runner/internal/commands/run/exec"
+	"github.com/artuross/github-actions-runner/internal/commands/run/listener"
+	"github.com/artuross/github-actions-runner/internal/commands/run/manager"
 	"github.com/artuross/github-actions-runner/internal/oauth/actions"
 	"github.com/artuross/github-actions-runner/internal/repository/ghactions"
 	"github.com/artuross/github-actions-runner/internal/repository/ghbroker"
@@ -85,8 +87,6 @@ func run(cliCtx *cli.Context) error {
 		ghbroker.WithTracerProvider(traceProvider),
 	)
 
-	executor := exec.NewExecutor(ghActionsClient, ghBrokerClient, traceProvider)
-
 	ctx, cancel := context.WithCancelCause(ctx)
 	stopChan := make(chan os.Signal, 1)
 
@@ -104,7 +104,11 @@ func run(cliCtx *cli.Context) error {
 
 	ctx = logger.WithContext(ctx)
 
-	if err := executor.Run(ctx, runnerConfig); err != nil && !errors.Is(err, errInterrupted) {
+	jobListener := listener.New(ghActionsClient, ghBrokerClient, traceProvider, runnerConfig)
+	jobWorker := exec.NewExecutor(ghActionsClient, ghBrokerClient, traceProvider, runnerConfig) // TODO: rename to worker
+
+	jobManager := manager.New(jobListener, jobWorker)
+	if err := jobManager.Run(ctx); err != nil && !errors.Is(err, errInterrupted) {
 		return fmt.Errorf("run command: %w", err)
 	}
 

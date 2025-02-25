@@ -2,7 +2,6 @@ package exec
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"slices"
 	"sync"
@@ -23,163 +22,24 @@ type Executor struct {
 	actionsClient *ghactions.Repository
 	brokerClient  *ghbroker.Repository
 	tracer        trace.Tracer
+	config        *runnerconfig.Config
 }
 
 func NewExecutor(
 	actionsClient *ghactions.Repository,
 	brokerClient *ghbroker.Repository,
 	traceProvider trace.TracerProvider,
+	config *runnerconfig.Config,
 ) *Executor {
 	return &Executor{
 		actionsClient: actionsClient,
 		brokerClient:  brokerClient,
 		tracer:        traceProvider.Tracer("github.com/artuross/internal/commands/run/exec"),
+		config:        config,
 	}
 }
 
-func (e *Executor) Run(ctx context.Context, config *runnerconfig.Config) error {
-	ctx, span := e.tracer.Start(ctx, "run")
-	defer span.End()
-
-	logger := zerolog.Ctx(ctx)
-
-	var sessionID *string
-	defer func() {
-		if sessionID == nil {
-			return
-		}
-
-		ctx := context.WithoutCancel(ctx)
-
-		logger.Debug().Str("sessionID", *sessionID).Msg("deleting session")
-
-		if err := e.actionsClient.DeleteSession(ctx, config.RunnerGroupID, *sessionID); err != nil {
-			logger.Error().Err(err).Msg("delete session")
-		}
-	}()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return context.Cause(ctx)
-
-		default:
-		}
-
-		logger.Debug().Int64("runnerID", config.RunnerID).Msg("creating session")
-
-		session, err := e.actionsClient.CreateSession(ctx, config.RunnerGroupID, config.RunnerID, config.RunnerName)
-		if err != nil {
-			logger.Error().Err(err).Msg("create session")
-
-			logger.Warn().Msg("retrying in 10 seconds")
-			time.Sleep(10 * time.Second)
-
-			// TODO: handle alternative session issues
-			continue
-		}
-
-		sessionID = &session.SessionID
-
-		resetMessageClient := time.NewTimer(10 * time.Minute)
-		resetMessageClient.Stop()
-
-		getPoolMessageProvider := "actions"
-		getPoolMessage := e.actionsClient.GetPoolMessage
-		resetGetPoolMessage := func() {
-			resetMessageClient.Stop()
-
-			select {
-			case <-resetMessageClient.C:
-			default:
-			}
-
-			getPoolMessageProvider = "actions"
-			getPoolMessage = e.actionsClient.GetPoolMessage
-		}
-
-		for {
-			select {
-			case <-ctx.Done():
-				return context.Cause(ctx)
-
-			default:
-			}
-
-			select {
-			// if timer expired, reset getPoolMessage cache
-			case <-resetMessageClient.C:
-				resetGetPoolMessage()
-
-			// otherwise proceed
-			default:
-			}
-
-			logger.Debug().
-				Int64("runnerID", config.RunnerID).
-				Str("provider", getPoolMessageProvider).
-				Msg("fetching pool message")
-
-			// TODO: needs to happen on repeat even when there's an active job running
-			message, err := getPoolMessage(ctx, session.SessionID, config.RunnerGroupID, ghapi.RunnerStatusOnline)
-			if errors.Is(err, ghbroker.ErrorEmptyBody) {
-				logger.Info().Msg("no message")
-				continue
-			}
-
-			if err != nil {
-				// on errors, reset getPoolMessage cache
-				resetGetPoolMessage()
-
-				logger.Error().Err(err).Msg("read pool message")
-				continue
-			}
-
-			switch msg := message.(type) {
-			case ghapi.BrokerMigration:
-				if getPoolMessageProvider == "broker" {
-					logger.Warn().Msg("received BrokerMigration message from broker")
-				}
-
-				getPoolMessageProvider = "broker"
-				getPoolMessage = func(ctx context.Context, sessionID string, poolID int64, status ghapi.RunnerStatus) (ghapi.Message, error) {
-					return e.brokerClient.GetPoolMessage(ctx, msg.BaseURL, sessionID, poolID, status)
-				}
-
-				resetMessageClient.Reset(10 * time.Minute)
-				continue
-
-			case ghapi.BrokerMessage:
-				logger.Info().Int64("message_id", msg.MessageID).Msg("received BrokerMessage")
-
-				runnerJobRequest, ok := msg.Message.(ghapi.MessageRunnerJobRequest)
-				if !ok {
-					logger.Error().Msg("unknown message type")
-					continue
-				}
-
-				if err := e.startJob(ctx, config, *sessionID, runnerJobRequest); err != nil {
-					logger.Error().Err(err).Msg("failed to start job")
-					continue
-				}
-
-				// TODO: must happen right after job details are fetched
-				if err := e.actionsClient.DeletePoolMessage(ctx, *sessionID, config.RunnerGroupID, msg.MessageID); err != nil {
-					logger.Error().Err(err).Msg("delete pool message")
-					continue
-				}
-
-				continue
-			}
-
-			logger.Warn().Any("message", message).Msg("unknown message")
-
-			time.Sleep(10 * time.Second)
-		}
-	}
-}
-
-func (e *Executor) startJob(ctx context.Context, config *runnerconfig.Config, sessionID string, runnerJobRequest ghapi.MessageRunnerJobRequest) error {
+func (e *Executor) Run(ctx context.Context, runnerJobRequest ghapi.MessageRunnerJobRequest) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -194,7 +54,7 @@ func (e *Executor) startJob(ctx context.Context, config *runnerconfig.Config, se
 	}
 
 	// initial call to get next iteration time
-	acquireJob, err := e.actionsClient.AcquireJob(ctx, config.RunnerGroupID, jobRequestMessage.RequestID)
+	acquireJob, err := e.actionsClient.AcquireJob(ctx, e.config.RunnerGroupID, jobRequestMessage.RequestID)
 	if !ok {
 		return fmt.Errorf("acquire job: %w", err)
 	}
@@ -231,7 +91,7 @@ func (e *Executor) startJob(ctx context.Context, config *runnerconfig.Config, se
 				return
 
 			case <-timer.C:
-				acquireJob, err := e.actionsClient.AcquireJob(ctx, config.RunnerGroupID, jobRequestMessage.RequestID)
+				acquireJob, err := e.actionsClient.AcquireJob(ctx, e.config.RunnerGroupID, jobRequestMessage.RequestID)
 				if !ok {
 					logger.Error().Err(err).Msg("acquire job")
 
@@ -262,56 +122,22 @@ func (e *Executor) startJob(ctx context.Context, config *runnerconfig.Config, se
 
 	timelineController := timeline.NewController(
 		jobActionsClient,
-		config.RunnerName,
+		e.config.RunnerName,
 		jobRequestMessage.Plan.PlanID,
 		jobRequestMessage.Timeline.ID,
 	)
 
-	if err := timelineController.Start(ctx); err != nil {
-		logger.Error().Err(err).Msg("start timeline controller")
-		return err
-	}
-
 	jobController := &JobController{
 		timelineController: timelineController,
+		jobActionsClient:   jobActionsClient,
 		CurrentTaskStack:   []*runner.TaskDefinition{},
 		QueueMain:          nil,
+		Tracer:             e.tracer, // TODO: create new tracer
 	}
 
-	// register jobs
-	jobController.AddTask(
-		ctx,
-		&runner.RunnerJob{Id: jobRequestMessage.JobID},
-		nil,
-		"hello",
-		"__default",
-	)
-
-	// TODO: is the ID generated?
-	jobController.AddTask(
-		ctx,
-		&runner.RunnerTaskInit{Id: "e57bfafe-5896-4d3f-881e-7e298f92fbee", ParentId: jobRequestMessage.JobID, Steps: jobRequestMessage.Steps},
-		&jobRequestMessage.JobID,
-		"Set up job",
-		"JobExtension_Init",
-	)
-
-	ctx, span := e.tracer.Start(ctx, "run action")
-	defer span.End()
-
-	if err := jobController.Run(ctx); err != nil {
+	if err := jobController.Run(ctx, e.config.RunnerName, &jobRequestMessage); err != nil {
 		logger.Error().Err(err).Msg("run job controller")
 		return err
-	}
-
-	// shutdown timeline controller
-	if err := timelineController.Shutdown(ctx); err != nil {
-		logger.Error().Err(err).Msg("stop timeline controller")
-	}
-
-	// mark action as done
-	if err := jobActionsClient.PostEvents(ctx, jobRequestMessage.Plan.PlanID, jobRequestMessage.JobID, jobRequestMessage.RequestID); err != nil {
-		logger.Error().Err(err).Msg("post events")
 	}
 
 	cancel()
@@ -321,8 +147,10 @@ func (e *Executor) startJob(ctx context.Context, config *runnerconfig.Config, se
 
 type JobController struct {
 	timelineController *timeline.Controller
+	jobActionsClient   *ghactions.Repository
 	CurrentTaskStack   []*runner.TaskDefinition // last in first out - currently active jobs
 	QueueMain          []*runner.TaskDefinition
+	Tracer             trace.Tracer
 }
 
 func (c *JobController) AddTask(ctx context.Context, task runner.Task, parentID *string, name, refName string) {
@@ -383,8 +211,34 @@ func (c *JobController) AddTask(ctx context.Context, task runner.Task, parentID 
 	zerolog.Ctx(ctx).Error().Any("arr", c.QueueMain).Msg("post")
 }
 
-func (c *JobController) Run(ctx context.Context) error {
+func (c *JobController) Run(ctx context.Context, runnerName string, jobRequestMessage *ghapi.PipelineAgentJobRequest) error {
+	ctx, span := c.Tracer.Start(ctx, "run action")
+	defer span.End()
+
 	logger := zerolog.Ctx(ctx)
+
+	if err := c.timelineController.Start(ctx); err != nil {
+		logger.Error().Err(err).Msg("start timeline controller")
+		return err
+	}
+
+	// register jobs
+	c.AddTask(
+		ctx,
+		&runner.RunnerJob{Id: jobRequestMessage.JobID},
+		nil,
+		"hello",
+		"__default",
+	)
+
+	// TODO: is the ID generated?
+	c.AddTask(
+		ctx,
+		&runner.RunnerTaskInit{Id: "e57bfafe-5896-4d3f-881e-7e298f92fbee", ParentId: jobRequestMessage.JobID, Steps: jobRequestMessage.Steps},
+		&jobRequestMessage.JobID,
+		"Set up job",
+		"JobExtension_Init",
+	)
 
 	for len(c.QueueMain) > 0 {
 		task := c.QueueMain[0]
@@ -428,6 +282,16 @@ func (c *JobController) Run(ctx context.Context) error {
 			c.timelineController.RecordFinished(timeline.ID(c.CurrentTaskStack[i].ID), time.Now())
 			c.CurrentTaskStack = c.CurrentTaskStack[:i]
 		}
+	}
+
+	// shutdown timeline controller
+	if err := c.timelineController.Shutdown(ctx); err != nil {
+		logger.Error().Err(err).Msg("stop timeline controller")
+	}
+
+	// mark action as done
+	if err := c.jobActionsClient.PostEvents(ctx, jobRequestMessage.Plan.PlanID, jobRequestMessage.JobID, jobRequestMessage.RequestID); err != nil {
+		logger.Error().Err(err).Msg("post events")
 	}
 
 	return nil
