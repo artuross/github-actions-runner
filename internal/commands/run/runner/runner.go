@@ -29,25 +29,25 @@ var (
 
 type (
 	RunnerTaskComposite struct {
-		id   string
-		name string
+		id    string
+		Namee string
 	}
 
 	RunnerJob struct {
-		Id   string
-		name string
+		Id    string
+		Namee string
 	}
 
 	RunnerTaskInit struct {
 		Id       string
-		name     string
+		Namee    string
 		ParentId string
 		Steps    []ghapi.Step
 	}
 
 	RunnerTaskFake struct {
-		id   string
-		name string
+		id    string
+		Namee string
 	}
 )
 
@@ -56,10 +56,10 @@ func (j *RunnerTaskComposite) ID() string { return j.id }
 func (j *RunnerTaskFake) ID() string      { return j.id }
 func (j *RunnerTaskInit) ID() string      { return j.Id }
 
-func (j *RunnerJob) Name() string           { return j.name }
-func (j *RunnerTaskComposite) Name() string { return j.name }
-func (j *RunnerTaskFake) Name() string      { return j.name }
-func (j *RunnerTaskInit) Name() string      { return j.name }
+func (j *RunnerJob) Name() string           { return j.Namee }
+func (j *RunnerTaskComposite) Name() string { return j.Namee }
+func (j *RunnerTaskFake) Name() string      { return j.Namee }
+func (j *RunnerTaskInit) Name() string      { return j.Namee }
 
 func (j *RunnerJob) Type() string           { return "job" }
 func (t *RunnerTaskComposite) Type() string { return "task" }
@@ -119,13 +119,13 @@ func (r *RunnerTaskInit) Run(ctx context.Context, ctrl controller, logWriter io.
 		var task Task
 		if current.Step.Type == "composite" {
 			task = &RunnerTaskComposite{
-				id:   current.Step.ID,
-				name: current.Step.Name,
+				id:    current.Step.ID,
+				Namee: current.Step.Name,
 			}
 		} else {
 			task = &RunnerTaskFake{
-				id:   current.Step.ID,
-				name: current.Step.Name,
+				id:    current.Step.ID,
+				Namee: current.Step.Type,
 			}
 		}
 

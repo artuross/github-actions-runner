@@ -112,9 +112,14 @@ func (w *Wrapper) UnmarshalJSON(data []byte) error {
 				Parameters internalParameters `json:"parameters"`
 			}
 
+			internalData struct {
+				ResultsServiceURL string `json:"ResultsServiceUrl"`
+			}
+
 			internalEndpoint struct {
-				URL           string                `json:"url"`
 				Authorization internalAuthorization `json:"authorization"`
+				Data          internalData          `json:"data"`
+				URL           string                `json:"url"`
 			}
 
 			internalResources struct {
@@ -161,12 +166,13 @@ func (w *Wrapper) UnmarshalJSON(data []byte) error {
 
 			for _, ie := range internalEndpoints {
 				endpoint := ghapi.Endpoint{
-					URL: ie.URL,
 					Authorization: ghapi.EndpointAuthorization{
 						Parameters: ghapi.EndpointAuthorizationParameters{
 							AccessToken: ie.Authorization.Parameters.AccessToken,
 						},
 					},
+					ActionsServiceURL: ie.URL,
+					ResultsServiceURL: ie.Data.ResultsServiceURL,
 				}
 
 				endpoints = append(endpoints, endpoint)

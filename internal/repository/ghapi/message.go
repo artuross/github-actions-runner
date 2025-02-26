@@ -63,8 +63,9 @@ type EndpointAuthorization struct {
 }
 
 type Endpoint struct {
-	URL           string
-	Authorization EndpointAuthorization
+	Authorization     EndpointAuthorization
+	ActionsServiceURL string
+	ResultsServiceURL string
 }
 
 type Resources struct {

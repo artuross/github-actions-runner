@@ -9,9 +9,12 @@ import (
 
 	"github.com/artuross/github-actions-runner/internal/commands/run/runner"
 	"github.com/artuross/github-actions-runner/internal/commands/run/timeline"
+	"github.com/artuross/github-actions-runner/internal/commands/run/workflowsteps"
 	"github.com/artuross/github-actions-runner/internal/defaults"
 	"github.com/artuross/github-actions-runner/internal/repository/ghactions"
 	"github.com/artuross/github-actions-runner/internal/repository/ghapi"
+	"github.com/artuross/github-actions-runner/internal/repository/resultsreceiver"
+	"github.com/kr/pretty"
 	"github.com/rs/zerolog"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -23,19 +26,24 @@ const (
 
 type JobController struct {
 	actionsClient *ghactions.Repository
+	workflowSteps *workflowsteps.Controller
 	timeline      *timeline.Controller
 	tracer        trace.Tracer
 	queueMain     []*runner.TaskDefinition
+	allJobs       []*runner.TaskDefinition
 }
 
 func New(
 	timeline *timeline.Controller,
 	actionsClient *ghactions.Repository,
+	workflowSteps *workflowsteps.Controller,
 	options ...func(*JobController),
 ) *JobController {
 	ctrl := JobController{
 		actionsClient: actionsClient,
+		workflowSteps: workflowSteps,
 		timeline:      timeline,
+		allJobs:       make([]*runner.TaskDefinition, 0),
 		tracer:        defaults.TraceProvider.Tracer(tracerName),
 		queueMain:     make([]*runner.TaskDefinition, 0),
 	}
@@ -48,6 +56,8 @@ func New(
 }
 
 func (c *JobController) AddTask(ctx context.Context, task runner.Task, parentID *string, name, refName string) {
+	fmt.Println("adding with name", name, refName, task.ID(), task.Name())
+
 	timelineRecordID := timeline.ID(task.ID())
 
 	timelineRecordParentID := (*timeline.ID)(nil)
@@ -65,6 +75,22 @@ func (c *JobController) AddTask(ctx context.Context, task runner.Task, parentID 
 	}
 
 	c.timeline.AddRecord(timelineRecordID, timelineRecordParentID, timelineTaskType, name, refName)
+
+	if task.Type() == "task" {
+		taskCount := 0
+		for _, t := range c.allJobs {
+			if t.Task.Type() == "task" {
+				taskCount++
+			}
+		}
+
+		c.workflowSteps.SendUpdate(resultsreceiver.Step{
+			ExternalID: task.ID(),
+			Name:       task.Name(),
+			Status:     resultsreceiver.StatusPending,
+			Number:     taskCount + 1,
+		})
+	}
 
 	zerolog.Ctx(ctx).Error().Any("arr", c.queueMain).Msg("snap")
 	zerolog.Ctx(ctx).Info().Any("task_id", task.ID()).Any("parent_id", parentID).Msg("task")
@@ -91,16 +117,20 @@ func (c *JobController) AddTask(ctx context.Context, task runner.Task, parentID 
 		}
 	}
 
-	queue := make([]*runner.TaskDefinition, 0, len(c.queueMain)+1)
-	queue = append(queue, c.queueMain[:insertIndex]...)
-	queue = append(queue, &runner.TaskDefinition{
+	thisTask := &runner.TaskDefinition{
 		ID:       task.ID(),
 		ParentID: parentID,
 		Task:     task,
-	})
+	}
+
+	queue := make([]*runner.TaskDefinition, 0, len(c.queueMain)+1)
+	queue = append(queue, c.queueMain[:insertIndex]...)
+	queue = append(queue, thisTask)
 	queue = append(queue, c.queueMain[insertIndex:]...)
 
 	c.queueMain = queue
+
+	c.allJobs = append(c.allJobs, thisTask)
 
 	zerolog.Ctx(ctx).Error().Any("arr", c.queueMain).Msg("post")
 }
@@ -109,6 +139,8 @@ func (c *JobController) Run(ctx context.Context, runnerName string, jobRequestMe
 	ctx, span := c.tracer.Start(ctx, "run job")
 	defer span.End()
 
+	pretty.Println(jobRequestMessage)
+
 	logger := zerolog.Ctx(ctx)
 
 	if err := c.timeline.Start(ctx); err != nil {
@@ -116,10 +148,18 @@ func (c *JobController) Run(ctx context.Context, runnerName string, jobRequestMe
 		return err
 	}
 
+	if err := c.workflowSteps.Start(ctx); err != nil {
+		logger.Error().Err(err).Msg("start workflow steps controller")
+		return err
+	}
+
 	// register jobs
 	c.AddTask(
 		ctx,
-		&runner.RunnerJob{Id: jobRequestMessage.JobID},
+		&runner.RunnerJob{
+			Id:    jobRequestMessage.JobID,
+			Namee: "hello",
+		},
 		nil,
 		"hello",
 		"__default",
@@ -128,7 +168,12 @@ func (c *JobController) Run(ctx context.Context, runnerName string, jobRequestMe
 	// TODO: is the ID generated?
 	c.AddTask(
 		ctx,
-		&runner.RunnerTaskInit{Id: "e57bfafe-5896-4d3f-881e-7e298f92fbee", ParentId: jobRequestMessage.JobID, Steps: jobRequestMessage.Steps},
+		&runner.RunnerTaskInit{
+			Id:       "e57bfafe-5896-4d3f-881e-7e298f92fbee",
+			ParentId: jobRequestMessage.JobID,
+			Steps:    jobRequestMessage.Steps,
+			Namee:    "Set up job",
+		},
 		&jobRequestMessage.JobID,
 		"Set up job",
 		"JobExtension_Init",
@@ -207,6 +252,15 @@ func (c *JobController) Run(ctx context.Context, runnerName string, jobRequestMe
 				break
 			}
 
+			if stackedTD.td.Task.Type() == "task" {
+				c.workflowSteps.SendUpdate(workflowsteps.UpdateCompleted{
+					ID:          stackedTD.td.Task.ID(),
+					CompletedAt: time.Now(),
+					Status:      resultsreceiver.StatusCompleted,
+					Conclusion:  resultsreceiver.ConclusionSuccess,
+				})
+			}
+
 			// end span
 			stackedTD.span.End()
 
@@ -217,6 +271,11 @@ func (c *JobController) Run(ctx context.Context, runnerName string, jobRequestMe
 			c.timeline.RecordFinished(timeline.ID(currentTaskStack[i].td.ID), time.Now())
 			currentTaskStack = currentTaskStack[:i]
 		}
+	}
+
+	// shutdown workflow steps controller
+	if err := c.workflowSteps.Shutdown(ctx); err != nil {
+		logger.Error().Err(err).Msg("stop workflow steps controller")
 	}
 
 	// shutdown timeline controller

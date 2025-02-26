@@ -14,13 +14,16 @@ import (
 	"github.com/artuross/github-actions-runner/internal/commands/run/jobworker"
 	"github.com/artuross/github-actions-runner/internal/commands/run/manager"
 	"github.com/artuross/github-actions-runner/internal/commands/run/timeline"
+	"github.com/artuross/github-actions-runner/internal/commands/run/workflowsteps"
 	"github.com/artuross/github-actions-runner/internal/oauth/actions"
 	"github.com/artuross/github-actions-runner/internal/repository/ghactions"
 	"github.com/artuross/github-actions-runner/internal/repository/ghapi"
 	"github.com/artuross/github-actions-runner/internal/repository/ghbroker"
+	"github.com/artuross/github-actions-runner/internal/repository/resultsreceiver"
 	"github.com/artuross/github-actions-runner/internal/runnerconfig"
 	"github.com/rs/zerolog"
 	cli "github.com/urfave/cli/v2"
+	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/oauth2"
 )
 
@@ -107,38 +110,6 @@ func run(cliCtx *cli.Context) error {
 
 	ctx = logger.WithContext(ctx)
 
-	jobControllerFactory := func(jobDetails ghapi.PipelineAgentJobRequest) (*jobcontroller.JobController, error) {
-		httpClient := oauth2.NewClient(
-			ctx,
-			oauth2.StaticTokenSource(
-				&oauth2.Token{
-					AccessToken: jobDetails.Resources.Endpoints[0].Authorization.Parameters.AccessToken,
-				},
-			),
-		)
-
-		actionsClient := ghactions.New(
-			jobDetails.Resources.Endpoints[0].URL,
-			ghactions.WithHTTPClient(httpClient),
-			ghactions.WithTracerProvider(traceProvider),
-		)
-
-		timelineController := timeline.NewController(
-			actionsClient,
-			runnerConfig.RunnerName,
-			jobDetails.Plan.PlanID,
-			jobDetails.Timeline.ID,
-		)
-
-		jobController := jobcontroller.New(
-			timelineController,
-			actionsClient,
-			jobcontroller.WithTracerProvider(traceProvider),
-		)
-
-		return jobController, nil
-	}
-
 	jobListener := joblistener.New(
 		ghActionsClient,
 		ghBrokerClient,
@@ -150,7 +121,7 @@ func run(cliCtx *cli.Context) error {
 		ghActionsClient,
 		ghBrokerClient,
 		runnerConfig,
-		jobControllerFactory,
+		createJobControllerFactory(ctx, runnerConfig.RunnerName, traceProvider),
 		jobworker.WithTracerProvider(traceProvider),
 	)
 
@@ -165,4 +136,53 @@ func run(cliCtx *cli.Context) error {
 	}
 
 	return nil
+}
+
+type JobControllerFactory func(jobDetails ghapi.PipelineAgentJobRequest) (*jobcontroller.JobController, error)
+
+func createJobControllerFactory(ctx context.Context, runnerName string, traceProvider trace.TracerProvider) jobworker.JobControllerFactory {
+	return func(jobDetails ghapi.PipelineAgentJobRequest) (*jobcontroller.JobController, error) {
+		httpClient := oauth2.NewClient(
+			ctx,
+			oauth2.StaticTokenSource(
+				&oauth2.Token{
+					AccessToken: jobDetails.Resources.Endpoints[0].Authorization.Parameters.AccessToken,
+				},
+			),
+		)
+
+		actionsClient := ghactions.New(
+			jobDetails.Resources.Endpoints[0].ActionsServiceURL,
+			ghactions.WithHTTPClient(httpClient),
+			ghactions.WithTracerProvider(traceProvider),
+		)
+
+		resultsClient := resultsreceiver.New(
+			jobDetails.Resources.Endpoints[0].ResultsServiceURL,
+			resultsreceiver.WithHTTPClient(httpClient),
+			resultsreceiver.WithTracerProvider(traceProvider),
+		)
+
+		timelineController := timeline.NewController(
+			actionsClient,
+			runnerName,
+			jobDetails.Plan.PlanID,
+			jobDetails.Timeline.ID,
+		)
+
+		wsController := workflowsteps.NewController(
+			resultsClient,
+			jobDetails.Plan.PlanID,
+			jobDetails.JobID,
+		)
+
+		jobController := jobcontroller.New(
+			timelineController,
+			actionsClient,
+			wsController,
+			jobcontroller.WithTracerProvider(traceProvider),
+		)
+
+		return jobController, nil
+	}
 }
