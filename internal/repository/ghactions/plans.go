@@ -21,8 +21,8 @@ type PlanEventRequest struct {
 	JobID                 string            `json:"jobId"`
 }
 
-func (r *Repository) PostEvents(ctx context.Context, planID string, jobID string, requestID int64) error {
-	ctx, span := r.tracer.Start(ctx, "PostEvents")
+func (r *Repository) SendEventJobCompleted(ctx context.Context, planID string, jobID string, requestID int64) error {
+	ctx, span := r.tracer.Start(ctx, "SendEventJobCompleted")
 	defer span.End()
 
 	requestBody := PlanEventRequest{

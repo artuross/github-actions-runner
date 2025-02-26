@@ -201,6 +201,26 @@ func (c *Controller) Start(ctx context.Context) error {
 	return nil
 }
 
+func (c *Controller) JobStarted(id ID, displayName, refName string, startTime time.Time) {
+	c.queueChan <- Record{
+		ID:        id,
+		Type:      TypeJob,
+		State:     StateInProgress,
+		Name:      displayName,
+		RefName:   refName,
+		StartTime: &startTime,
+	}
+}
+
+// TODO: add result
+func (c *Controller) JobCompleted(id ID, finishTime time.Time) {
+	c.queueChan <- UpdateFinished{
+		ID:         id,
+		FinishTime: finishTime,
+		Result:     ResultSucceeded,
+	}
+}
+
 func (c *Controller) AddRecord(id ID, parentID *ID, recordType Type, name, refName string) {
 	c.queueChan <- Record{
 		ID:       id,

@@ -13,7 +13,6 @@ import (
 	"github.com/artuross/github-actions-runner/internal/defaults"
 	"github.com/artuross/github-actions-runner/internal/repository/ghactions"
 	"github.com/artuross/github-actions-runner/internal/repository/ghapi"
-	"github.com/artuross/github-actions-runner/internal/repository/resultsreceiver"
 	"github.com/kr/pretty"
 	"github.com/rs/zerolog"
 	"go.opentelemetry.io/otel/trace"
@@ -76,21 +75,21 @@ func (c *JobController) AddTask(ctx context.Context, task runner.Task, parentID 
 
 	c.timeline.AddRecord(timelineRecordID, timelineRecordParentID, timelineTaskType, name, refName)
 
-	if task.Type() == "task" {
-		taskCount := 0
-		for _, t := range c.allJobs {
-			if t.Task.Type() == "task" {
-				taskCount++
-			}
-		}
+	// if task.Type() == "task" {
+	// 	taskCount := 0
+	// 	for _, t := range c.allJobs {
+	// 		if t.Task.Type() == "task" {
+	// 			taskCount++
+	// 		}
+	// 	}
 
-		c.workflowSteps.SendUpdate(resultsreceiver.Step{
-			ExternalID: task.ID(),
-			Name:       task.Name(),
-			Status:     resultsreceiver.StatusPending,
-			Number:     taskCount + 1,
-		})
-	}
+	// 	c.workflowSteps.SendUpdate(resultsreceiver.Step{
+	// 		ExternalID: task.ID(),
+	// 		Name:       task.Name(),
+	// 		Status:     resultsreceiver.StatusPending,
+	// 		Number:     taskCount + 1,
+	// 	})
+	// }
 
 	zerolog.Ctx(ctx).Error().Any("arr", c.queueMain).Msg("snap")
 	zerolog.Ctx(ctx).Info().Any("task_id", task.ID()).Any("parent_id", parentID).Msg("task")
@@ -148,21 +147,17 @@ func (c *JobController) Run(ctx context.Context, runnerName string, jobRequestMe
 		return err
 	}
 
-	if err := c.workflowSteps.Start(ctx); err != nil {
-		logger.Error().Err(err).Msg("start workflow steps controller")
-		return err
-	}
+	// if err := c.workflowSteps.Start(ctx); err != nil {
+	// 	logger.Error().Err(err).Msg("start workflow steps controller")
+	// 	return err
+	// }
 
-	// register jobs
-	c.AddTask(
-		ctx,
-		&runner.RunnerJob{
-			Id:    jobRequestMessage.JobID,
-			Namee: "hello",
-		},
-		nil,
-		"hello",
-		"__default",
+	// register job
+	c.timeline.JobStarted(
+		timeline.ID(jobRequestMessage.JobID),
+		jobRequestMessage.JobDisplayName,
+		jobRequestMessage.JobName,
+		time.Now(),
 	)
 
 	// TODO: is the ID generated?
@@ -252,14 +247,14 @@ func (c *JobController) Run(ctx context.Context, runnerName string, jobRequestMe
 				break
 			}
 
-			if stackedTD.td.Task.Type() == "task" {
-				c.workflowSteps.SendUpdate(workflowsteps.UpdateCompleted{
-					ID:          stackedTD.td.Task.ID(),
-					CompletedAt: time.Now(),
-					Status:      resultsreceiver.StatusCompleted,
-					Conclusion:  resultsreceiver.ConclusionSuccess,
-				})
-			}
+			// if stackedTD.td.Task.Type() == "task" {
+			// 	c.workflowSteps.SendUpdate(workflowsteps.UpdateCompleted{
+			// 		ID:          stackedTD.td.Task.ID(),
+			// 		CompletedAt: time.Now(),
+			// 		Status:      resultsreceiver.StatusCompleted,
+			// 		Conclusion:  resultsreceiver.ConclusionSuccess,
+			// 	})
+			// }
 
 			// end span
 			stackedTD.span.End()
@@ -273,10 +268,13 @@ func (c *JobController) Run(ctx context.Context, runnerName string, jobRequestMe
 		}
 	}
 
+	// mark job as completed
+	c.timeline.JobCompleted(timeline.ID(jobRequestMessage.JobID), time.Now())
+
 	// shutdown workflow steps controller
-	if err := c.workflowSteps.Shutdown(ctx); err != nil {
-		logger.Error().Err(err).Msg("stop workflow steps controller")
-	}
+	// if err := c.workflowSteps.Shutdown(ctx); err != nil {
+	// 	logger.Error().Err(err).Msg("stop workflow steps controller")
+	// }
 
 	// shutdown timeline controller
 	if err := c.timeline.Shutdown(ctx); err != nil {
@@ -284,7 +282,7 @@ func (c *JobController) Run(ctx context.Context, runnerName string, jobRequestMe
 	}
 
 	// mark action as done
-	if err := c.actionsClient.PostEvents(ctx, jobRequestMessage.Plan.PlanID, jobRequestMessage.JobID, jobRequestMessage.RequestID); err != nil {
+	if err := c.actionsClient.SendEventJobCompleted(ctx, jobRequestMessage.Plan.PlanID, jobRequestMessage.JobID, jobRequestMessage.RequestID); err != nil {
 		logger.Error().Err(err).Msg("post events")
 	}
 

@@ -32,7 +32,7 @@ type (
 	PipelineAgentJobRequest struct {
 		JobID          string
 		JobDisplayName string
-		JobName        string
+		JobName        string // TODO: probably rename to RefName
 		RequestID      int64
 		Steps          []Step
 		Plan           Plan

@@ -21,7 +21,6 @@ type Runnable interface {
 }
 
 var (
-	_ Task = (*RunnerJob)(nil)
 	_ Task = (*RunnerTaskComposite)(nil)
 	_ Task = (*RunnerTaskFake)(nil)
 	_ Task = (*RunnerTaskInit)(nil)
@@ -30,11 +29,6 @@ var (
 type (
 	RunnerTaskComposite struct {
 		id    string
-		Namee string
-	}
-
-	RunnerJob struct {
-		Id    string
 		Namee string
 	}
 
@@ -51,17 +45,14 @@ type (
 	}
 )
 
-func (j *RunnerJob) ID() string           { return j.Id }
 func (j *RunnerTaskComposite) ID() string { return j.id }
 func (j *RunnerTaskFake) ID() string      { return j.id }
 func (j *RunnerTaskInit) ID() string      { return j.Id }
 
-func (j *RunnerJob) Name() string           { return j.Namee }
 func (j *RunnerTaskComposite) Name() string { return j.Namee }
 func (j *RunnerTaskFake) Name() string      { return j.Namee }
 func (j *RunnerTaskInit) Name() string      { return j.Namee }
 
-func (j *RunnerJob) Type() string           { return "job" }
 func (t *RunnerTaskComposite) Type() string { return "task" }
 func (t *RunnerTaskFake) Type() string      { return "task" }
 func (t *RunnerTaskInit) Type() string      { return "task" }
