@@ -2,37 +2,49 @@ package jobcontroller
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"slices"
 	"time"
 
 	"github.com/artuross/github-actions-runner/internal/commands/run/runner"
 	"github.com/artuross/github-actions-runner/internal/commands/run/timeline"
+	"github.com/artuross/github-actions-runner/internal/defaults"
 	"github.com/artuross/github-actions-runner/internal/repository/ghactions"
 	"github.com/artuross/github-actions-runner/internal/repository/ghapi"
 	"github.com/rs/zerolog"
 	"go.opentelemetry.io/otel/trace"
 )
 
+const (
+	// TODO: may want to do it via debug.ReadBuildInfo
+	tracerName = "github.com/artuross/github-actions-runner/internal/commands/run/jobcontroller"
+)
+
 type JobController struct {
-	actionsClient    *ghactions.Repository
-	timeline         *timeline.Controller
-	tracer           trace.Tracer
-	currentTaskStack []*runner.TaskDefinition // last in first out - currently active jobs
-	queueMain        []*runner.TaskDefinition
+	actionsClient *ghactions.Repository
+	timeline      *timeline.Controller
+	tracer        trace.Tracer
+	queueMain     []*runner.TaskDefinition
 }
 
 func New(
 	timeline *timeline.Controller,
 	actionsClient *ghactions.Repository,
-	traceProvider trace.TracerProvider,
+	options ...func(*JobController),
 ) *JobController {
-	return &JobController{
-		actionsClient:    actionsClient,
-		timeline:         timeline,
-		tracer:           traceProvider.Tracer("github.com/artuross/internal/commands/run/jobcontroller"),
-		currentTaskStack: make([]*runner.TaskDefinition, 0),
-		queueMain:        make([]*runner.TaskDefinition, 0),
+	ctrl := JobController{
+		actionsClient: actionsClient,
+		timeline:      timeline,
+		tracer:        defaults.TraceProvider.Tracer(tracerName),
+		queueMain:     make([]*runner.TaskDefinition, 0),
 	}
+
+	for _, apply := range options {
+		apply(&ctrl)
+	}
+
+	return &ctrl
 }
 
 func (c *JobController) AddTask(ctx context.Context, task runner.Task, parentID *string, name, refName string) {
@@ -122,11 +134,46 @@ func (c *JobController) Run(ctx context.Context, runnerName string, jobRequestMe
 		"JobExtension_Init",
 	)
 
+	type StackedTaskDefinition struct {
+		td        *runner.TaskDefinition
+		ctx       context.Context
+		span      trace.Span
+		logWriter io.WriteCloser
+	}
+
+	currentTaskStack := make([]*StackedTaskDefinition, 0)
+
 	for len(c.queueMain) > 0 {
 		task := c.queueMain[0]
 		c.queueMain = c.queueMain[1:]
 
-		c.currentTaskStack = append(c.currentTaskStack, task)
+		parentTaskCtx := ctx
+		if len(currentTaskStack) > 0 {
+			parentTaskCtx = currentTaskStack[len(currentTaskStack)-1].ctx
+		}
+
+		ctx, span := c.tracer.Start(parentTaskCtx, fmt.Sprintf("run step %s", task.ID))
+
+		var parentLogWriters []io.Writer
+		for _, task := range currentTaskStack {
+			if task.logWriter == nil {
+				continue
+			}
+
+			parentLogWriters = append(parentLogWriters, task.logWriter)
+		}
+
+		logWriter := c.timeline.GetLogWriter(ctx, timeline.ID(task.ID))
+		logWriter.Write([]byte{0xEF, 0xBB, 0xBF})
+
+		parentLogWriters = append(parentLogWriters, logWriter)
+
+		currentTaskStack = append(currentTaskStack, &StackedTaskDefinition{
+			td:        task,
+			ctx:       ctx,
+			span:      span,
+			logWriter: logWriter,
+		})
 
 		// update timeline
 		c.timeline.RecordStarted(timeline.ID(task.ID), time.Now())
@@ -135,17 +182,17 @@ func (c *JobController) Run(ctx context.Context, runnerName string, jobRequestMe
 		if runnable, ok := task.Task.(runner.Runnable); ok {
 			logger.Debug().Str("task_id", task.ID).Msg("running task in controller")
 
-			// ctx, span := e.tracer.Start(ctx, fmt.Sprintf("run step %s", task.ID))
-			if err := runnable.Run(ctx, c); err != nil {
+			taskLogWriter := timeline.NewMultiLogWriter(parentLogWriters...)
+
+			if err := runnable.Run(ctx, c, taskLogWriter); err != nil {
 				logger.Error().Err(err).Msg("run task")
 				continue
 			}
-			// span.End()
 		}
 
 		// update timeline
-		for i := len(c.currentTaskStack) - 1; i >= 0; i-- {
-			task := c.currentTaskStack[i]
+		for i := len(currentTaskStack) - 1; i >= 0; i-- {
+			stackedTD := currentTaskStack[i]
 
 			// find relations
 			hasChildren := slices.ContainsFunc(c.queueMain, func(item *runner.TaskDefinition) bool {
@@ -153,16 +200,22 @@ func (c *JobController) Run(ctx context.Context, runnerName string, jobRequestMe
 					return false
 				}
 
-				return task.ID == *item.ParentID
+				return stackedTD.td.ID == *item.ParentID
 			})
 
 			if hasChildren {
 				break
 			}
 
+			// end span
+			stackedTD.span.End()
+
+			// close logger
+			stackedTD.logWriter.Close()
+
 			// update record and remove from stack
-			c.timeline.RecordFinished(timeline.ID(c.currentTaskStack[i].ID), time.Now())
-			c.currentTaskStack = c.currentTaskStack[:i]
+			c.timeline.RecordFinished(timeline.ID(currentTaskStack[i].td.ID), time.Now())
+			currentTaskStack = currentTaskStack[:i]
 		}
 	}
 
@@ -177,4 +230,10 @@ func (c *JobController) Run(ctx context.Context, runnerName string, jobRequestMe
 	}
 
 	return nil
+}
+
+func WithTracerProvider(tp trace.TracerProvider) func(*JobController) {
+	return func(r *JobController) {
+		r.tracer = tp.Tracer(tracerName)
+	}
 }

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/artuross/github-actions-runner/internal/commands/run/manager"
+	"github.com/artuross/github-actions-runner/internal/defaults"
 	"github.com/artuross/github-actions-runner/internal/repository/ghactions"
 	"github.com/artuross/github-actions-runner/internal/repository/ghapi"
 	"github.com/artuross/github-actions-runner/internal/repository/ghbroker"
@@ -15,25 +16,36 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
+const (
+	// TODO: may want to do it via debug.ReadBuildInfo
+	tracerName = "github.com/artuross/github-actions-runner/internal/commands/run/joblistener"
+)
+
 type Listener struct {
 	actionsClient *ghactions.Repository
 	brokerClient  *ghbroker.Repository
-	tracer        trace.Tracer
 	config        *runnerconfig.Config
+	tracer        trace.Tracer
 }
 
 func New(
 	actionsClient *ghactions.Repository,
 	brokerClient *ghbroker.Repository,
-	traceProvider trace.TracerProvider,
 	config *runnerconfig.Config,
+	options ...func(*Listener),
 ) *Listener {
-	return &Listener{
+	listener := Listener{
 		actionsClient: actionsClient,
 		brokerClient:  brokerClient,
-		tracer:        traceProvider.Tracer("github.com/artuross/internal/commands/run/listener"),
+		tracer:        defaults.TraceProvider.Tracer(tracerName),
 		config:        config,
 	}
+
+	for _, apply := range options {
+		apply(&listener)
+	}
+
+	return &listener
 }
 
 func (l *Listener) Run(ctx context.Context, getState func() manager.State, startJob func(jobRequest ghapi.MessageRunnerJobRequest) error) error {
@@ -238,4 +250,10 @@ func (b *TransparentBrokerMigrationClient) GetPoolMessage(ctx context.Context, s
 	}
 
 	return nil, fmt.Errorf("max tries exceeded")
+}
+
+func WithTracerProvider(tp trace.TracerProvider) func(*Listener) {
+	return func(r *Listener) {
+		r.tracer = tp.Tracer(tracerName)
+	}
 }

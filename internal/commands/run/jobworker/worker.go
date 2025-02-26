@@ -7,12 +7,18 @@ import (
 	"time"
 
 	"github.com/artuross/github-actions-runner/internal/commands/run/jobcontroller"
+	"github.com/artuross/github-actions-runner/internal/defaults"
 	"github.com/artuross/github-actions-runner/internal/repository/ghactions"
 	"github.com/artuross/github-actions-runner/internal/repository/ghapi"
 	"github.com/artuross/github-actions-runner/internal/repository/ghbroker"
 	"github.com/artuross/github-actions-runner/internal/runnerconfig"
 	"github.com/rs/zerolog"
 	"go.opentelemetry.io/otel/trace"
+)
+
+const (
+	// TODO: may want to do it via debug.ReadBuildInfo
+	tracerName = "github.com/artuross/github-actions-runner/internal/commands/run/jobworker"
 )
 
 type JobControllerFactory func(ghapi.PipelineAgentJobRequest) (*jobcontroller.JobController, error)
@@ -28,17 +34,23 @@ type Worker struct {
 func New(
 	actionsClient *ghactions.Repository,
 	brokerClient *ghbroker.Repository,
-	traceProvider trace.TracerProvider,
 	config *runnerconfig.Config,
 	jobControllerFactory JobControllerFactory,
+	options ...func(*Worker),
 ) *Worker {
-	return &Worker{
+	worker := Worker{
 		actionsClient:        actionsClient,
 		brokerClient:         brokerClient,
-		tracer:               traceProvider.Tracer("github.com/artuross/internal/commands/run/jobworker"),
+		tracer:               defaults.TraceProvider.Tracer(tracerName),
 		config:               config,
 		jobControllerFactory: jobControllerFactory,
 	}
+
+	for _, apply := range options {
+		apply(&worker)
+	}
+
+	return &worker
 }
 
 func (w *Worker) Run(ctx context.Context, runnerJobRequest ghapi.MessageRunnerJobRequest) error {
@@ -122,5 +134,14 @@ func (w *Worker) Run(ctx context.Context, runnerJobRequest ghapi.MessageRunnerJo
 		return err
 	}
 
+	// cancel to release the job lock
+	cancel()
+
 	return nil
+}
+
+func WithTracerProvider(tp trace.TracerProvider) func(*Worker) {
+	return func(r *Worker) {
+		r.tracer = tp.Tracer(tracerName)
+	}
 }

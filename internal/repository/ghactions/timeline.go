@@ -50,7 +50,7 @@ type TimelineRecordDiff struct {
 	WorkerName       *string           `json:"workerName"`      // ??
 	Order            *int              `json:"order,omitempty"` // ??
 	RefName          *string           `json:"refName"`
-	Log              *json.RawMessage  `json:"log"`                     // ??
+	Log              *Log              `json:"log"`                     // ??
 	Details          *string           `json:"details"`                 // ??
 	ErrorCount       int               `json:"errorCount"`              // ??
 	WarningCount     int               `json:"warningCount"`            // ??

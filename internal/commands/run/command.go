@@ -120,6 +120,7 @@ func run(cliCtx *cli.Context) error {
 		actionsClient := ghactions.New(
 			jobDetails.Resources.Endpoints[0].URL,
 			ghactions.WithHTTPClient(httpClient),
+			ghactions.WithTracerProvider(traceProvider),
 		)
 
 		timelineController := timeline.NewController(
@@ -129,15 +130,36 @@ func run(cliCtx *cli.Context) error {
 			jobDetails.Timeline.ID,
 		)
 
-		jobController := jobcontroller.New(timelineController, actionsClient, traceProvider)
+		jobController := jobcontroller.New(
+			timelineController,
+			actionsClient,
+			jobcontroller.WithTracerProvider(traceProvider),
+		)
 
 		return jobController, nil
 	}
 
-	jobListener := joblistener.New(ghActionsClient, ghBrokerClient, traceProvider, runnerConfig)
-	jobWorker := jobworker.New(ghActionsClient, ghBrokerClient, traceProvider, runnerConfig, jobControllerFactory)
+	jobListener := joblistener.New(
+		ghActionsClient,
+		ghBrokerClient,
+		runnerConfig,
+		joblistener.WithTracerProvider(traceProvider),
+	)
 
-	jobManager := manager.New(jobListener, jobWorker)
+	jobWorker := jobworker.New(
+		ghActionsClient,
+		ghBrokerClient,
+		runnerConfig,
+		jobControllerFactory,
+		jobworker.WithTracerProvider(traceProvider),
+	)
+
+	jobManager := manager.New(
+		jobListener,
+		jobWorker,
+		manager.WithTracerProvider(traceProvider),
+	)
+
 	if err := jobManager.Run(ctx); err != nil && !errors.Is(err, errInterrupted) {
 		return fmt.Errorf("run command: %w", err)
 	}

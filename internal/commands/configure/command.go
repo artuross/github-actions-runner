@@ -110,7 +110,7 @@ func run(cliCtx *cli.Context) error {
 		RunnerLabel:          cfg.RunnerLabel,
 	}
 
-	executor := exec.NewExecutor(ghActionsClient, ghRESTClient, ghRunnerClient, traceProvider)
+	executor := exec.NewExecutor(ghActionsClient, ghRESTClient, ghRunnerClient, exec.WithTracerProvider(traceProvider))
 	if err := executor.Run(ctx, execConfig); err != nil {
 		return fmt.Errorf("run command: %w", err)
 	}

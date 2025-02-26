@@ -3,16 +3,13 @@ package timeline
 import (
 	"context"
 	"fmt"
+	"io"
 	"slices"
 	"sync"
 	"time"
 
 	"github.com/artuross/github-actions-runner/internal/repository/ghactions"
 )
-
-type GithubClient interface {
-	PatchTimeline(ctx context.Context, planID, timelineID string, diffs []ghactions.TimelineRecordDiff) ([]ghactions.TimelineRecord, error)
-}
 
 type ID string
 
@@ -38,6 +35,11 @@ const (
 )
 
 type Update any
+
+type LogUploaded struct {
+	ID    ID
+	LogID int64
+}
 
 type UpdateStarted struct {
 	ID        ID
@@ -94,7 +96,7 @@ type RecordDiff struct {
 }
 
 type Controller struct {
-	ghClient   GithubClient
+	ghClient   *ghactions.Repository
 	runnerName string
 	planID     string
 	timelineID string
@@ -107,7 +109,7 @@ type Controller struct {
 	serverState    []Record
 }
 
-func NewController(ghClient GithubClient, runnerName, planID, timelineID string) *Controller {
+func NewController(ghClient *ghactions.Repository, runnerName, planID, timelineID string) *Controller {
 	return &Controller{
 		ghClient:   ghClient,
 		runnerName: runnerName,
@@ -210,6 +212,17 @@ func (c *Controller) AddRecord(id ID, parentID *ID, recordType Type, name, refNa
 	}
 }
 
+func (c *Controller) GetLogWriter(ctx context.Context, id ID) io.WriteCloser {
+	return NewLogWriter(ctx, c.ghClient, c, c.planID, id)
+}
+
+func (c *Controller) RecordLogUploaded(id ID, logID int64) {
+	c.queueChan <- LogUploaded{
+		ID:    id,
+		LogID: logID,
+	}
+}
+
 func (c *Controller) RecordStarted(id ID, startTime time.Time) {
 	c.queueChan <- UpdateStarted{
 		ID:        id,
@@ -252,6 +265,23 @@ func (c *Controller) tick(ctx context.Context) {
 			update.Order = siblings + 1
 
 			c.localState = append(c.localState, update)
+
+		case LogUploaded:
+			recordIndex := slices.IndexFunc(c.localState, recordWithID(update.ID))
+
+			if recordIndex == -1 {
+				// TODO: handle
+				fmt.Println("record not found")
+				continue
+			}
+
+			record := c.localState[recordIndex]
+
+			record.Log = &Log{
+				ID: int(update.LogID),
+			}
+
+			c.localState[recordIndex] = record
 
 		case UpdateFinished:
 			recordIndex := slices.IndexFunc(c.localState, recordWithID(update.ID))
@@ -310,7 +340,7 @@ func (c *Controller) tick(ctx context.Context) {
 		if sr.Log != nil {
 			log = &Log{
 				ID:       sr.Log.ID,
-				Location: sr.Location,
+				Location: &sr.Log.Location,
 			}
 		}
 
@@ -412,7 +442,6 @@ func getRecordDiff(local, server Record) (RecordDiff, bool) {
 		ChangeID:        local.ChangeID,
 		Order:           local.Order,
 		RefName:         local.RefName,
-		Log:             local.Log,
 		Location:        local.Location,
 		Identifier:      local.Identifier,
 	}
@@ -451,6 +480,11 @@ func getRecordDiff(local, server Record) (RecordDiff, bool) {
 		needsSync = true
 	}
 
+	if local.Log != server.Log {
+		diff.Log = local.Log
+		needsSync = true
+	}
+
 	if !needsSync {
 		return RecordDiff{}, false
 	}
@@ -462,6 +496,12 @@ func convertToAPIDiffs(diffs []RecordDiff, runnerName string) []ghactions.Timeli
 	apiDiffs := make([]ghactions.TimelineRecordDiff, 0, len(diffs))
 
 	for _, diff := range diffs {
+		var log *ghactions.Log
+		if diff.Log != nil {
+			log = &ghactions.Log{
+				ID: diff.Log.ID,
+			}
+		}
 		tlDiff := ghactions.TimelineRecordDiff{
 			ID:               string(diff.ID),
 			ParentID:         (*string)(diff.ParentID),
@@ -479,7 +519,7 @@ func convertToAPIDiffs(diffs []RecordDiff, runnerName string) []ghactions.Timeli
 			WorkerName:       &runnerName,
 			Order:            &diff.Order,
 			RefName:          &diff.RefName,
-			Log:              nil,
+			Log:              log,
 			Details:          nil,
 			ErrorCount:       0,
 			WarningCount:     0,

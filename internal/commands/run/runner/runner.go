@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"fmt"
+	"io"
 	"math/rand"
 	"time"
 
@@ -16,7 +17,7 @@ type StepWithParentID struct {
 }
 
 type Runnable interface {
-	Run(ctx context.Context, ctrl controller) error
+	Run(ctx context.Context, ctrl controller, logWriter io.Writer) error
 }
 
 var (
@@ -65,22 +66,28 @@ func (t *RunnerTaskComposite) Type() string { return "task" }
 func (t *RunnerTaskFake) Type() string      { return "task" }
 func (t *RunnerTaskInit) Type() string      { return "task" }
 
-func (r *RunnerTaskFake) Run(ctx context.Context, _ controller) error {
+func (r *RunnerTaskFake) Run(ctx context.Context, _ controller, logWriter io.Writer) error {
 	logger := log.Ctx(ctx)
 
 	logger.Debug().Msg("running simple task")
 	defer logger.Debug().Msg("completed simple task")
 
-	time.Sleep(time.Millisecond*time.Duration(rand.Intn(3000)) + 1000)
+	logWriter.Write([]byte(fmt.Sprintf("%s running simple task\n", time.Now().UTC().Format("2006-01-02T15:04:05.0000000Z07:00"))))
+	logWriter.Write([]byte(fmt.Sprintf("%s completed simple task\n", time.Now().UTC().Format("2006-01-02T15:04:05.0000000Z07:00"))))
+
+	time.Sleep(time.Second*time.Duration(rand.Intn(10)) + time.Second)
 
 	return nil
 }
 
-func (r *RunnerTaskInit) Run(ctx context.Context, ctrl controller) error {
+func (r *RunnerTaskInit) Run(ctx context.Context, ctrl controller, logWriter io.Writer) error {
 	logger := log.Ctx(ctx)
 
 	logger.Debug().Msg("running pre task")
 	defer logger.Debug().Msg("completed pre task")
+
+	logWriter.Write([]byte(fmt.Sprintf("%s running pre task\n", time.Now().UTC().Format("2006-01-02T15:04:05.0000000Z07:00"))))
+	logWriter.Write([]byte(fmt.Sprintf("%s completed pre task\n", time.Now().UTC().Format("2006-01-02T15:04:05.0000000Z07:00"))))
 
 	toProcess := make([]StepWithParentID, 0)
 	for _, step := range r.Steps {

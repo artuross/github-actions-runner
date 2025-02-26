@@ -7,11 +7,17 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/artuross/github-actions-runner/internal/defaults"
 	"github.com/artuross/github-actions-runner/internal/repository/ghactions"
 	"github.com/artuross/github-actions-runner/internal/repository/ghrest"
 	"github.com/artuross/github-actions-runner/internal/repository/ghrunner"
 	"github.com/artuross/github-actions-runner/internal/runnerconfig"
 	"go.opentelemetry.io/otel/trace"
+)
+
+const (
+	// TODO: may want to do it via debug.ReadBuildInfo
+	tracerName = "github.com/artuross/github-actions-runner/internal/commands/configure/exec"
 )
 
 type Config struct {
@@ -34,14 +40,20 @@ func NewExecutor(
 	actionsClient *ghactions.Repository,
 	restClient *ghrest.Repository,
 	runnerClient *ghrunner.Repository,
-	traceProvider trace.TracerProvider,
+	options ...func(*Executor),
 ) *Executor {
-	return &Executor{
+	executor := Executor{
 		actionsClient: actionsClient,
 		restClient:    restClient,
 		runnerClient:  runnerClient,
-		tracer:        traceProvider.Tracer("github.com/artuross/internal/commands/configure/exec"),
+		tracer:        defaults.TraceProvider.Tracer(tracerName),
 	}
+
+	for _, apply := range options {
+		apply(&executor)
+	}
+
+	return &executor
 }
 
 func (e *Executor) Run(ctx context.Context, config Config) error {
@@ -125,4 +137,10 @@ func generateKeyPair(random io.Reader) (*rsa.PrivateKey, *rsa.PublicKey, error) 
 	publicKey := privateKey.Public().(*rsa.PublicKey)
 
 	return privateKey, publicKey, nil
+}
+
+func WithTracerProvider(tp trace.TracerProvider) func(*Executor) {
+	return func(r *Executor) {
+		r.tracer = tp.Tracer(tracerName)
+	}
 }

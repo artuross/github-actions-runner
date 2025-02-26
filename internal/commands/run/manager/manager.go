@@ -6,8 +6,15 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/artuross/github-actions-runner/internal/defaults"
 	"github.com/artuross/github-actions-runner/internal/repository/ghapi"
+	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/sync/errgroup"
+)
+
+const (
+	// TODO: may want to do it via debug.ReadBuildInfo
+	tracerName = "github.com/artuross/github-actions-runner/internal/commands/run/manager"
 )
 
 type Status string
@@ -35,17 +42,25 @@ type Manager struct {
 	state    State
 	listener Listener
 	worker   Worker
+	tracer   trace.Tracer
 }
 
-func New(listener Listener, worker Worker) *Manager {
-	return &Manager{
+func New(listener Listener, worker Worker, options ...func(*Manager)) *Manager {
+	manager := Manager{
 		mu: sync.Mutex{},
 		state: State{
 			Status: StatusOnline,
 		},
 		listener: listener,
 		worker:   worker,
+		tracer:   defaults.TraceProvider.Tracer(tracerName),
 	}
+
+	for _, apply := range options {
+		apply(&manager)
+	}
+
+	return &manager
 }
 
 func (m *Manager) GetState() State {
@@ -75,6 +90,9 @@ func (m *Manager) SetOnline() {
 }
 
 func (m *Manager) Run(ctx context.Context) error {
+	ctx, span := m.tracer.Start(ctx, "run manager")
+	defer span.End()
+
 	// TODO: probably don't need this?
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
@@ -89,6 +107,9 @@ func (m *Manager) Run(ctx context.Context) error {
 
 		group.Go(func() error {
 			defer m.SetOnline()
+
+			ctx, span := m.tracer.Start(ctx, "run job")
+			defer span.End()
 
 			if err := m.worker.Run(ctx, jobRequest); err != nil {
 				return fmt.Errorf("running worker with job: %w", err)
@@ -114,4 +135,10 @@ func (m *Manager) Run(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func WithTracerProvider(tp trace.TracerProvider) func(*Manager) {
+	return func(r *Manager) {
+		r.tracer = tp.Tracer(tracerName)
+	}
 }
