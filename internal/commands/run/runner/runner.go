@@ -20,31 +20,18 @@ type Runnable interface {
 	Run(ctx context.Context, ctrl controller, logWriter io.Writer) error
 }
 
-var (
-	_ Task = (*RunnerTaskComposite)(nil)
-	_ Task = (*RunnerTaskFake)(nil)
-)
+var _ Task = (*RunnerTaskFake)(nil)
 
 type (
-	RunnerTaskComposite struct {
-		id    string
-		Namee string
-	}
-
 	RunnerTaskFake struct {
 		id    string
 		Namee string
 	}
 )
 
-func (j *RunnerTaskComposite) ID() string { return j.id }
-func (j *RunnerTaskFake) ID() string      { return j.id }
-
-func (j *RunnerTaskComposite) DisplayName() string { return j.Namee }
-func (j *RunnerTaskFake) DisplayName() string      { return j.Namee }
-
-func (t *RunnerTaskComposite) Type() string { return "task" }
-func (t *RunnerTaskFake) Type() string      { return "task" }
+func (j *RunnerTaskFake) ID() string          { return j.id }
+func (j *RunnerTaskFake) DisplayName() string { return j.Namee }
+func (t *RunnerTaskFake) Type() string        { return "task" }
 
 func (r *RunnerTaskFake) Run(ctx context.Context, _ controller, logWriter io.Writer) error {
 	logger := log.Ctx(ctx)
