@@ -9,6 +9,10 @@ type Preparer interface {
 	Prepare(ctx context.Context, logWriter io.Writer) ([]Step, error)
 }
 
+type Runner interface {
+	Run(ctx context.Context, logWriter io.Writer) error
+}
+
 type Step interface {
 	Typer // TODO: remove
 	ID() string
