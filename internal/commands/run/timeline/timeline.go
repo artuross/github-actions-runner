@@ -125,7 +125,7 @@ func NewController(ghClient *ghactions.Repository, runnerName, planID, timelineI
 	}
 }
 
-func (c *Controller) Start(ctx context.Context) error {
+func (c *Controller) Start(ctx context.Context) {
 	// create a timer and stop it right away
 	timer := time.NewTimer(time.Hour)
 	if !timer.Stop() {
@@ -197,8 +197,6 @@ func (c *Controller) Start(ctx context.Context) error {
 			}
 		}
 	}()
-
-	return nil
 }
 
 func (c *Controller) JobStarted(id ID, displayName, refName string, startTime time.Time) {

@@ -138,9 +138,14 @@ func (c *JobController) Run(ctx context.Context, runnerName string, jobRequestMe
 
 	logger := zerolog.Ctx(ctx)
 
-	if err := c.timeline.Start(ctx); err != nil {
-		logger.Error().Err(err).Msg("start timeline controller")
-		return err
+	{
+		// timeline
+		c.timeline.Start(ctx)
+		defer func() {
+			if err := c.timeline.Shutdown(ctx); err != nil {
+				logger.Error().Err(err).Msg("stop timeline controller")
+			}
+		}()
 	}
 
 	// if err := c.workflowSteps.Start(ctx); err != nil {
@@ -148,15 +153,24 @@ func (c *JobController) Run(ctx context.Context, runnerName string, jobRequestMe
 	// 	return err
 	// }
 
-	// register job
-	c.timeline.JobStarted(
-		timeline.ID(jobRequestMessage.JobID),
-		jobRequestMessage.JobDisplayName,
-		jobRequestMessage.JobName,
-		time.Now(),
-	)
+	{
+		// register job
+		c.timeline.JobStarted(
+			timeline.ID(jobRequestMessage.JobID),
+			jobRequestMessage.JobDisplayName,
+			jobRequestMessage.JobName,
+			time.Now(),
+		)
+
+		// mark job as completed
+		// TODO: must send real job results
+		defer func() {
+			c.timeline.JobCompleted(timeline.ID(jobRequestMessage.JobID), time.Now())
+		}()
+	}
 
 	{
+		// register init step that creates steps listed in workflow file
 		initStep, err := step.NewInternalStart(jobRequestMessage.JobID, jobRequestMessage.Steps)
 		if err != nil {
 			logger.Error().Err(err).Msg("create init step")
@@ -288,18 +302,10 @@ func (c *JobController) Run(ctx context.Context, runnerName string, jobRequestMe
 		}
 	}
 
-	// mark job as completed
-	c.timeline.JobCompleted(timeline.ID(jobRequestMessage.JobID), time.Now())
-
 	// shutdown workflow steps controller
 	// if err := c.workflowSteps.Shutdown(ctx); err != nil {
 	// 	logger.Error().Err(err).Msg("stop workflow steps controller")
 	// }
-
-	// shutdown timeline controller
-	if err := c.timeline.Shutdown(ctx); err != nil {
-		logger.Error().Err(err).Msg("stop timeline controller")
-	}
 
 	// mark action as done
 	if err := c.actionsClient.SendEventJobCompleted(ctx, jobRequestMessage.Plan.PlanID, jobRequestMessage.JobID, jobRequestMessage.RequestID); err != nil {
