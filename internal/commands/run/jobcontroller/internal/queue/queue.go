@@ -21,15 +21,15 @@ func (oq *OrderedQueue) HasNext() bool {
 }
 
 // Pop returns and removes first element from the queue.
-func (oq *OrderedQueue) Pop() (step.Step, bool) {
+func (oq *OrderedQueue) Pop() step.Step {
 	if len(oq.queue) == 0 {
-		return nil, false
+		return nil
 	}
 
 	step := oq.queue[0]
 	oq.queue = oq.queue[1:]
 
-	return step, true
+	return step
 }
 
 // Push adds an item to the queue in the correct order.

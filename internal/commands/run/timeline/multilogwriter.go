@@ -12,9 +12,9 @@ type MultiLogWriter struct {
 }
 
 // NewMultiLogWriter creates a new MultiLogWriter that writes to multiple writers
-func NewMultiLogWriter(writers ...io.Writer) *MultiLogWriter {
+func NewMultiLogWriter(writer io.Writer, writers ...io.Writer) *MultiLogWriter {
 	return &MultiLogWriter{
-		writers: writers,
+		writers: append([]io.Writer{writer}, writers...),
 	}
 }
 

@@ -13,7 +13,6 @@ import (
 	"github.com/artuross/github-actions-runner/internal/defaults"
 	"github.com/artuross/github-actions-runner/internal/repository/ghactions"
 	"github.com/artuross/github-actions-runner/internal/repository/ghapi"
-	"github.com/kr/pretty"
 	"github.com/rs/zerolog"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -79,11 +78,9 @@ func (c *JobController) AddStep(ctx context.Context, stepToAdd step.Step) {
 	// }
 }
 
-func (c *JobController) Run(ctx context.Context, jobRequestMessage *ghapi.PipelineAgentJobRequest) error {
+func (c *JobController) Run(ctx context.Context, jobDetails *ghapi.PipelineAgentJobRequest) error {
 	ctx, span := c.tracer.Start(ctx, "run job")
 	defer span.End()
-
-	pretty.Println(jobRequestMessage)
 
 	logger := zerolog.Ctx(ctx)
 
@@ -104,23 +101,18 @@ func (c *JobController) Run(ctx context.Context, jobRequestMessage *ghapi.Pipeli
 
 	{
 		// register job
-		c.timeline.JobStarted(
-			jobRequestMessage.JobID,
-			jobRequestMessage.JobDisplayName,
-			jobRequestMessage.JobName,
-			time.Now(),
-		)
+		c.timeline.JobStarted(jobDetails.JobID, jobDetails.JobDisplayName, jobDetails.JobName, time.Now())
 
 		// mark job as completed
 		// TODO: must send real job results
 		defer func() {
-			c.timeline.JobCompleted(jobRequestMessage.JobID, time.Now())
+			c.timeline.JobCompleted(jobDetails.JobID, time.Now())
 		}()
 	}
 
 	{
 		// register init step that creates steps listed in workflow file
-		initStep, err := step.NewInternalStart(jobRequestMessage.JobID, jobRequestMessage.Steps)
+		initStep, err := step.NewInternalStart(jobDetails.JobID, jobDetails.Steps)
 		if err != nil {
 			logger.Error().Err(err).Msg("create init step")
 			return err
@@ -139,25 +131,21 @@ func (c *JobController) Run(ctx context.Context, jobRequestMessage *ghapi.Pipeli
 	executionContext := stack.NewExecutionContext(ctx)
 
 	for c.queueMain.HasNext() {
-		currentStep, _ := c.queueMain.Pop()
+		currentStep := c.queueMain.Pop()
 
-		parentStepCtx := executionContext.Context()
-
-		ctx, span := c.tracer.Start(parentStepCtx, fmt.Sprintf("run step %s", currentStep.ID()))
+		ctx, span := c.tracer.Start(executionContext.Context(), fmt.Sprintf("run step %s", currentStep.ID()))
 
 		parentLogWriters := executionContext.LogWriters()
 
 		logWriter := c.timeline.GetLogWriter(ctx, currentStep.ID())
 		logWriter.Write([]byte{0xEF, 0xBB, 0xBF})
 
-		parentLogWriters = append(parentLogWriters, logWriter)
-
 		executionContext.Push(ctx, currentStep, span, logWriter)
 
 		// update timeline
 		c.timeline.RecordStarted(currentStep.ID(), time.Now())
 
-		taskLogWriter := timeline.NewMultiLogWriter(parentLogWriters...)
+		taskLogWriter := timeline.NewMultiLogWriter(logWriter, parentLogWriters...)
 
 		// prepare: resolves next steps
 		if step, ok := currentStep.(step.Preparer); ok {
@@ -186,10 +174,10 @@ func (c *JobController) Run(ctx context.Context, jobRequestMessage *ghapi.Pipeli
 
 		// update timeline
 		for !executionContext.Empty() {
-			stackedTD := executionContext.Peek()
+			stepContext := executionContext.Peek()
 
 			// find relations
-			if c.queueMain.HasChildren(stackedTD.Step.ID()) {
+			if c.queueMain.HasChildren(stepContext.Step.ID()) {
 				break
 			}
 
@@ -203,14 +191,15 @@ func (c *JobController) Run(ctx context.Context, jobRequestMessage *ghapi.Pipeli
 			// }
 
 			// end span
-			stackedTD.Span.End()
+			stepContext.Span.End()
 
 			// close logger
-			stackedTD.LogWriter.Close()
+			stepContext.LogWriter.Close()
 
 			// update record and remove from stack
-			c.timeline.RecordFinished(stackedTD.Step.ID(), time.Now())
+			c.timeline.RecordFinished(stepContext.Step.ID(), time.Now())
 
+			// remove last item
 			_ = executionContext.Pop()
 		}
 	}
@@ -221,7 +210,7 @@ func (c *JobController) Run(ctx context.Context, jobRequestMessage *ghapi.Pipeli
 	// }
 
 	// mark action as done
-	if err := c.actionsClient.SendEventJobCompleted(ctx, jobRequestMessage.Plan.PlanID, jobRequestMessage.JobID, jobRequestMessage.RequestID); err != nil {
+	if err := c.actionsClient.SendEventJobCompleted(ctx, jobDetails.Plan.PlanID, jobDetails.JobID, jobDetails.RequestID); err != nil {
 		logger.Error().Err(err).Msg("post events")
 	}
 
