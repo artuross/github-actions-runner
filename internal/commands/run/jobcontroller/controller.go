@@ -197,7 +197,7 @@ func (c *JobController) Run(ctx context.Context, runnerName string, jobRequestMe
 			parentTaskCtx = currentTaskStack[len(currentTaskStack)-1].ctx
 		}
 
-		ctx, span := c.tracer.Start(parentTaskCtx, fmt.Sprintf("run step %s", task.ID))
+		ctx, span := c.tracer.Start(parentTaskCtx, fmt.Sprintf("run step %s", task.ID()))
 
 		var parentLogWriters []io.Writer
 		for _, task := range currentTaskStack {
