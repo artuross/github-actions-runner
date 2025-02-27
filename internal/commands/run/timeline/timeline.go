@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/artuross/github-actions-runner/internal/helpers/to"
 	"github.com/artuross/github-actions-runner/internal/repository/ghactions"
 )
 
@@ -199,9 +200,9 @@ func (c *Controller) Start(ctx context.Context) {
 	}()
 }
 
-func (c *Controller) JobStarted(id ID, displayName, refName string, startTime time.Time) {
+func (c *Controller) JobStarted(id string, displayName, refName string, startTime time.Time) {
 	c.queueChan <- Record{
-		ID:        id,
+		ID:        ID(id),
 		Type:      TypeJob,
 		State:     StateInProgress,
 		Name:      displayName,
@@ -211,46 +212,46 @@ func (c *Controller) JobStarted(id ID, displayName, refName string, startTime ti
 }
 
 // TODO: add result
-func (c *Controller) JobCompleted(id ID, finishTime time.Time) {
+func (c *Controller) JobCompleted(id string, finishTime time.Time) {
 	c.queueChan <- UpdateFinished{
-		ID:         id,
+		ID:         ID(id),
 		FinishTime: finishTime,
 		Result:     ResultSucceeded,
 	}
 }
 
-func (c *Controller) AddRecord(id ID, parentID *ID, recordType Type, name, refName string) {
+func (c *Controller) AddRecord(id string, parentID string, name, refName string) {
 	c.queueChan <- Record{
-		ID:       id,
-		ParentID: parentID,
-		Type:     recordType,
+		ID:       ID(id),
+		ParentID: to.Ptr(ID(parentID)),
+		Type:     TypeTask,
 		State:    StatePending,
 		Name:     name,
 		RefName:  refName,
 	}
 }
 
-func (c *Controller) GetLogWriter(ctx context.Context, id ID) io.WriteCloser {
+func (c *Controller) GetLogWriter(ctx context.Context, id string) io.WriteCloser {
 	return NewLogWriter(ctx, c.ghClient, c, c.planID, id)
 }
 
-func (c *Controller) RecordLogUploaded(id ID, logID int64) {
+func (c *Controller) RecordLogUploaded(id string, logID int64) {
 	c.queueChan <- LogUploaded{
-		ID:    id,
+		ID:    ID(id),
 		LogID: logID,
 	}
 }
 
-func (c *Controller) RecordStarted(id ID, startTime time.Time) {
+func (c *Controller) RecordStarted(id string, startTime time.Time) {
 	c.queueChan <- UpdateStarted{
-		ID:        id,
+		ID:        ID(id),
 		StartTime: startTime,
 	}
 }
 
-func (c *Controller) RecordFinished(id ID, finishTime time.Time) {
+func (c *Controller) RecordFinished(id string, finishTime time.Time) {
 	c.queueChan <- UpdateFinished{
-		ID:         id,
+		ID:         ID(id),
 		FinishTime: finishTime,
 		Result:     ResultSucceeded,
 	}
@@ -275,7 +276,7 @@ func (c *Controller) tick(ctx context.Context) {
 
 			siblings := 0
 			for _, item := range c.localState {
-				if Str(item.ParentID) == Str(update.ParentID) {
+				if to.Value(item.ParentID) == to.Value(update.ParentID) {
 					siblings++
 				}
 			}
@@ -554,12 +555,4 @@ func convertToAPIDiffs(diffs []RecordDiff, runnerName string) []ghactions.Timeli
 	}
 
 	return apiDiffs
-}
-
-func Str[T ~string](str *T) T {
-	if str == nil {
-		return ""
-	}
-
-	return *str
 }

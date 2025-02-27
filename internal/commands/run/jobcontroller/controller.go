@@ -24,6 +24,7 @@ const (
 )
 
 type JobController struct {
+	runnerName    string
 	actionsClient *ghactions.Repository
 	workflowSteps *workflowsteps.Controller
 	timeline      *timeline.Controller
@@ -33,12 +34,14 @@ type JobController struct {
 }
 
 func New(
+	runnerName string,
 	timeline *timeline.Controller,
 	actionsClient *ghactions.Repository,
 	workflowSteps *workflowsteps.Controller,
 	options ...func(*JobController),
 ) *JobController {
 	ctrl := JobController{
+		runnerName:    runnerName,
 		actionsClient: actionsClient,
 		workflowSteps: workflowSteps,
 		timeline:      timeline,
@@ -54,23 +57,8 @@ func New(
 	return &ctrl
 }
 
-func (c *JobController) AddTask(ctx context.Context, task step.Step, parentID string, name, refName string) {
-	fmt.Println("adding with name", name, refName, task.ID(), task.DisplayName())
-
-	timelineRecordID := timeline.ID(task.ID())
-
-	timelineRecordParentID := timeline.ID(parentID)
-
-	timelineTaskType := timeline.TypeTask
-	if task.Type() == "job" {
-		timelineTaskType = timeline.TypeJob
-	} else if task.Type() == "task" {
-		timelineTaskType = timeline.TypeTask
-	} else {
-		timelineTaskType = "unknown"
-	}
-
-	c.timeline.AddRecord(timelineRecordID, &timelineRecordParentID, timelineTaskType, name, refName)
+func (c *JobController) AddStep(ctx context.Context, stepToAdd step.Step) {
+	c.timeline.AddRecord(stepToAdd.ID(), stepToAdd.ParentID(), stepToAdd.DisplayName(), stepToAdd.RefName())
 
 	// if task.Type() == "task" {
 	// 	taskCount := 0
@@ -88,35 +76,28 @@ func (c *JobController) AddTask(ctx context.Context, task step.Step, parentID st
 	// 	})
 	// }
 
-	zerolog.Ctx(ctx).Error().Any("arr", c.queueMain).Msg("snap")
-	zerolog.Ctx(ctx).Info().Any("task_id", task.ID()).Any("parent_id", parentID).Msg("task")
-
 	lastIndex := len(c.queueMain) - 1
 
 	insertIndex := 0
 	insertIndex = lastIndex + 1
 	for i := lastIndex; i >= 0; i-- {
-		if c.queueMain[i].ParentID() == parentID || c.queueMain[i].ID() == parentID {
+		if isParentOrSibling(stepToAdd.ID(), c.queueMain[i]) {
 			insertIndex = i + 1
 			break
 		}
 	}
 
-	thisTask := task
-
 	queue := make([]step.Step, 0, len(c.queueMain)+1)
 	queue = append(queue, c.queueMain[:insertIndex]...)
-	queue = append(queue, thisTask)
+	queue = append(queue, stepToAdd)
 	queue = append(queue, c.queueMain[insertIndex:]...)
 
 	c.queueMain = queue
 
-	c.allJobs = append(c.allJobs, thisTask)
-
-	zerolog.Ctx(ctx).Error().Any("arr", c.queueMain).Msg("post")
+	c.allJobs = append(c.allJobs, stepToAdd)
 }
 
-func (c *JobController) Run(ctx context.Context, runnerName string, jobRequestMessage *ghapi.PipelineAgentJobRequest) error {
+func (c *JobController) Run(ctx context.Context, jobRequestMessage *ghapi.PipelineAgentJobRequest) error {
 	ctx, span := c.tracer.Start(ctx, "run job")
 	defer span.End()
 
@@ -142,7 +123,7 @@ func (c *JobController) Run(ctx context.Context, runnerName string, jobRequestMe
 	{
 		// register job
 		c.timeline.JobStarted(
-			timeline.ID(jobRequestMessage.JobID),
+			jobRequestMessage.JobID,
 			jobRequestMessage.JobDisplayName,
 			jobRequestMessage.JobName,
 			time.Now(),
@@ -151,7 +132,7 @@ func (c *JobController) Run(ctx context.Context, runnerName string, jobRequestMe
 		// mark job as completed
 		// TODO: must send real job results
 		defer func() {
-			c.timeline.JobCompleted(timeline.ID(jobRequestMessage.JobID), time.Now())
+			c.timeline.JobCompleted(jobRequestMessage.JobID, time.Now())
 		}()
 	}
 
@@ -170,64 +151,58 @@ func (c *JobController) Run(ctx context.Context, runnerName string, jobRequestMe
 		// })
 		//
 
-		c.AddTask(
-			ctx,
-			initStep,
-			initStep.ParentID(),
-			initStep.DisplayName(),
-			initStep.RefName(),
-		)
+		c.AddStep(ctx, initStep)
 	}
 
-	type StackedTaskDefinition struct {
-		td        step.Step
+	type StepContext struct {
+		step      step.Step
 		ctx       context.Context
 		span      trace.Span
 		logWriter io.WriteCloser
 	}
 
-	currentTaskStack := make([]*StackedTaskDefinition, 0)
+	stepsInProgressStack := make([]*StepContext, 0)
 
 	for len(c.queueMain) > 0 {
-		task := c.queueMain[0]
+		currentStep := c.queueMain[0]
 		c.queueMain = c.queueMain[1:]
 
-		parentTaskCtx := ctx
-		if len(currentTaskStack) > 0 {
-			parentTaskCtx = currentTaskStack[len(currentTaskStack)-1].ctx
+		parentStepCtx := ctx
+		if len(stepsInProgressStack) > 0 {
+			parentStepCtx = stepsInProgressStack[len(stepsInProgressStack)-1].ctx
 		}
 
-		ctx, span := c.tracer.Start(parentTaskCtx, fmt.Sprintf("run step %s", task.ID()))
+		ctx, span := c.tracer.Start(parentStepCtx, fmt.Sprintf("run step %s", currentStep.ID()))
 
 		var parentLogWriters []io.Writer
-		for _, task := range currentTaskStack {
-			if task.logWriter == nil {
+		for _, parentStep := range stepsInProgressStack {
+			if parentStep.logWriter == nil {
 				continue
 			}
 
-			parentLogWriters = append(parentLogWriters, task.logWriter)
+			parentLogWriters = append(parentLogWriters, parentStep.logWriter)
 		}
 
-		logWriter := c.timeline.GetLogWriter(ctx, timeline.ID(task.ID()))
+		logWriter := c.timeline.GetLogWriter(ctx, currentStep.ID())
 		logWriter.Write([]byte{0xEF, 0xBB, 0xBF})
 
 		parentLogWriters = append(parentLogWriters, logWriter)
 
-		currentTaskStack = append(currentTaskStack, &StackedTaskDefinition{
-			td:        task,
+		stepsInProgressStack = append(stepsInProgressStack, &StepContext{
+			step:      currentStep,
 			ctx:       ctx,
 			span:      span,
 			logWriter: logWriter,
 		})
 
 		// update timeline
-		c.timeline.RecordStarted(timeline.ID(task.ID()), time.Now())
+		c.timeline.RecordStarted(currentStep.ID(), time.Now())
 
 		taskLogWriter := timeline.NewMultiLogWriter(parentLogWriters...)
 
 		// prepare: resolves next steps
-		if step, ok := task.(step.Preparer); ok {
-			logger.Debug().Str("task_id", task.ID()).Msg("running prepare step in controller")
+		if step, ok := currentStep.(step.Preparer); ok {
+			logger.Debug().Str("task_id", currentStep.ID()).Msg("running prepare step in controller")
 
 			stepsToAdd, err := step.Prepare(ctx, taskLogWriter)
 			if err != nil {
@@ -236,13 +211,13 @@ func (c *JobController) Run(ctx context.Context, runnerName string, jobRequestMe
 			}
 
 			for _, step := range stepsToAdd {
-				c.AddTask(ctx, step, step.ParentID(), step.DisplayName(), step.RefName())
+				c.AddStep(ctx, step)
 			}
 		}
 
 		// runner: runs the main thing
-		if step, ok := task.(step.Runner); ok {
-			logger.Debug().Str("task_id", task.ID()).Msg("running runner step in controller")
+		if step, ok := currentStep.(step.Runner); ok {
+			logger.Debug().Str("task_id", currentStep.ID()).Msg("running runner step in controller")
 
 			if err := step.Run(ctx, taskLogWriter); err != nil {
 				logger.Error().Err(err).Msg("run step")
@@ -251,12 +226,12 @@ func (c *JobController) Run(ctx context.Context, runnerName string, jobRequestMe
 		}
 
 		// update timeline
-		for i := len(currentTaskStack) - 1; i >= 0; i-- {
-			stackedTD := currentTaskStack[i]
+		for i := len(stepsInProgressStack) - 1; i >= 0; i-- {
+			stackedTD := stepsInProgressStack[i]
 
 			// find relations
 			hasChildren := slices.ContainsFunc(c.queueMain, func(item step.Step) bool {
-				return stackedTD.td.ID() == item.ParentID()
+				return stackedTD.step.ID() == item.ParentID()
 			})
 
 			if hasChildren {
@@ -279,8 +254,8 @@ func (c *JobController) Run(ctx context.Context, runnerName string, jobRequestMe
 			stackedTD.logWriter.Close()
 
 			// update record and remove from stack
-			c.timeline.RecordFinished(timeline.ID(currentTaskStack[i].td.ID()), time.Now())
-			currentTaskStack = currentTaskStack[:i]
+			c.timeline.RecordFinished(stepsInProgressStack[i].step.ID(), time.Now())
+			stepsInProgressStack = stepsInProgressStack[:i]
 		}
 	}
 
@@ -301,4 +276,8 @@ func WithTracerProvider(tp trace.TracerProvider) func(*JobController) {
 	return func(r *JobController) {
 		r.tracer = tp.Tracer(tracerName)
 	}
+}
+
+func isParentOrSibling(id string, s step.Step) bool {
+	return id == s.ParentID() || id == s.ID()
 }

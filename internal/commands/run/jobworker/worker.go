@@ -129,7 +129,7 @@ func (w *Worker) Run(ctx context.Context, runnerJobRequest ghapi.MessageRunnerJo
 		return err
 	}
 
-	if err := jobController.Run(ctx, w.config.RunnerName, &jobDetails); err != nil {
+	if err := jobController.Run(ctx, &jobDetails); err != nil {
 		logger.Error().Err(err).Msg("run job controller")
 		return err
 	}

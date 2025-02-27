@@ -12,7 +12,7 @@ import (
 type LogWriter struct {
 	ctx        context.Context
 	planID     string
-	recordID   ID
+	recordID   string
 	client     *ghactions.Repository
 	controller *Controller
 	buffer     *bytes.Buffer
@@ -25,7 +25,7 @@ type LogWriter struct {
 
 const maxBufferSize = 2 * 1024 * 1024 // 2MB
 
-func NewLogWriter(ctx context.Context, client *ghactions.Repository, controller *Controller, planID string, recordID ID) *LogWriter {
+func NewLogWriter(ctx context.Context, client *ghactions.Repository, controller *Controller, planID string, recordID string) *LogWriter {
 	w := &LogWriter{
 		ctx:        ctx,
 		planID:     planID,
@@ -167,7 +167,7 @@ func (w *LogWriter) uploadChunk(chunk []byte) (int64, error) {
 }
 
 func (w *LogWriter) getUploadID(ctx context.Context) (int64, error) {
-	metadata, err := w.client.PostLogMetadata(ctx, w.planID, string(w.recordID))
+	metadata, err := w.client.PostLogMetadata(ctx, w.planID, w.recordID)
 	if err != nil {
 		return 0, fmt.Errorf("fetch log metadata: %w", err)
 	}
