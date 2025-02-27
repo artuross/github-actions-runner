@@ -11,7 +11,7 @@ var _ Step = (*Noop)(nil)
 
 type Noop struct {
 	id          string
-	parentID    *string
+	parentID    string
 	displayName string
 	refName     string
 }
@@ -28,7 +28,7 @@ func (s *Noop) Run(ctx context.Context, logWriter io.Writer) error {
 
 // for Step
 func (s *Noop) ID() string          { return s.id }
-func (s *Noop) ParentID() *string   { return s.parentID }
+func (s *Noop) ParentID() string    { return s.parentID }
 func (s *Noop) DisplayName() string { return s.displayName }
 func (s *Noop) RefName() string     { return s.refName }
 

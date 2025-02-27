@@ -16,7 +16,7 @@ var (
 
 type InternalStart struct {
 	id          string
-	parentID    *string
+	parentID    string
 	displayName string
 	refName     string
 
@@ -31,7 +31,7 @@ func NewInternalStart(jobID string, initialSteps []ghapi.Step) (*InternalStart, 
 
 	step := InternalStart{
 		id:           stepID.String(),
-		parentID:     &jobID,
+		parentID:     jobID,
 		displayName:  "Set up job",
 		refName:      "JobExtension_Init",
 		initialSteps: initialSteps,
@@ -61,7 +61,7 @@ func (s *InternalStart) Prepare(_ context.Context, _ io.Writer) ([]Step, error) 
 
 // for Step
 func (s *InternalStart) ID() string          { return s.id }
-func (s *InternalStart) ParentID() *string   { return s.parentID }
+func (s *InternalStart) ParentID() string    { return s.parentID }
 func (s *InternalStart) DisplayName() string { return s.displayName }
 func (s *InternalStart) RefName() string     { return s.refName }
 

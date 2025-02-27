@@ -54,15 +54,12 @@ func New(
 	return &ctrl
 }
 
-func (c *JobController) AddTask(ctx context.Context, task step.Step, parentID *string, name, refName string) {
+func (c *JobController) AddTask(ctx context.Context, task step.Step, parentID string, name, refName string) {
 	fmt.Println("adding with name", name, refName, task.ID(), task.DisplayName())
 
 	timelineRecordID := timeline.ID(task.ID())
 
-	timelineRecordParentID := (*timeline.ID)(nil)
-	if parentID != nil {
-		timelineRecordParentID = (*timeline.ID)(parentID)
-	}
+	timelineRecordParentID := timeline.ID(parentID)
 
 	timelineTaskType := timeline.TypeTask
 	if task.Type() == "job" {
@@ -73,7 +70,7 @@ func (c *JobController) AddTask(ctx context.Context, task step.Step, parentID *s
 		timelineTaskType = "unknown"
 	}
 
-	c.timeline.AddRecord(timelineRecordID, timelineRecordParentID, timelineTaskType, name, refName)
+	c.timeline.AddRecord(timelineRecordID, &timelineRecordParentID, timelineTaskType, name, refName)
 
 	// if task.Type() == "task" {
 	// 	taskCount := 0
@@ -97,22 +94,11 @@ func (c *JobController) AddTask(ctx context.Context, task step.Step, parentID *s
 	lastIndex := len(c.queueMain) - 1
 
 	insertIndex := 0
-	if parentID == nil {
-		for i := lastIndex; i >= 0; i-- {
-			if c.queueMain[i].ParentID() == nil {
-				insertIndex = i + 1
-				break
-			}
-		}
-	}
-
-	if parentID != nil {
-		insertIndex = lastIndex + 1
-		for i := lastIndex; i >= 0; i-- {
-			if (c.queueMain[i].ParentID() != nil && *c.queueMain[i].ParentID() == *parentID) || c.queueMain[i].ID() == *parentID {
-				insertIndex = i + 1
-				break
-			}
+	insertIndex = lastIndex + 1
+	for i := lastIndex; i >= 0; i-- {
+		if c.queueMain[i].ParentID() == parentID || c.queueMain[i].ID() == parentID {
+			insertIndex = i + 1
+			break
 		}
 	}
 
@@ -270,11 +256,7 @@ func (c *JobController) Run(ctx context.Context, runnerName string, jobRequestMe
 
 			// find relations
 			hasChildren := slices.ContainsFunc(c.queueMain, func(item step.Step) bool {
-				if item.ParentID() == nil {
-					return false
-				}
-
-				return stackedTD.td.ID() == *item.ParentID()
+				return stackedTD.td.ID() == item.ParentID()
 			})
 
 			if hasChildren {

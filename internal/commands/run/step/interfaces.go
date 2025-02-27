@@ -16,7 +16,7 @@ type Runner interface {
 type Step interface {
 	Typer // TODO: remove
 	ID() string
-	ParentID() *string
+	ParentID() string
 	DisplayName() string
 	RefName() string
 }
