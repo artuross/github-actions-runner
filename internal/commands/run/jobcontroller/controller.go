@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/artuross/github-actions-runner/internal/commands/run/runner"
+	"github.com/artuross/github-actions-runner/internal/commands/run/step"
 	"github.com/artuross/github-actions-runner/internal/commands/run/timeline"
 	"github.com/artuross/github-actions-runner/internal/commands/run/workflowsteps"
 	"github.com/artuross/github-actions-runner/internal/defaults"
@@ -55,7 +56,7 @@ func New(
 }
 
 func (c *JobController) AddTask(ctx context.Context, task runner.Task, parentID *string, name, refName string) {
-	fmt.Println("adding with name", name, refName, task.ID(), task.Name())
+	fmt.Println("adding with name", name, refName, task.ID(), task.DisplayName())
 
 	timelineRecordID := timeline.ID(task.ID())
 
@@ -160,19 +161,28 @@ func (c *JobController) Run(ctx context.Context, runnerName string, jobRequestMe
 		time.Now(),
 	)
 
-	// TODO: is the ID generated?
-	c.AddTask(
-		ctx,
-		&runner.RunnerTaskInit{
-			Id:       "e57bfafe-5896-4d3f-881e-7e298f92fbee",
-			ParentId: jobRequestMessage.JobID,
-			Steps:    jobRequestMessage.Steps,
-			Namee:    "Set up job",
-		},
-		&jobRequestMessage.JobID,
-		"Set up job",
-		"JobExtension_Init",
-	)
+	{
+		initStep, err := step.NewInternalStart(jobRequestMessage.JobID, jobRequestMessage.Steps)
+		if err != nil {
+			logger.Error().Err(err).Msg("create init step")
+			return err
+		}
+
+		// c.queueMain = append(c.queueMain, &runner.TaskDefinition{
+		// 	ID:       initStep.ID(),
+		// 	ParentID: initStep.ParentID(),
+		// 	Task:     initStep,
+		// })
+		//
+
+		c.AddTask(
+			ctx,
+			initStep,
+			initStep.ParentID(),
+			initStep.DisplayName(),
+			initStep.RefName(),
+		)
+	}
 
 	type StackedTaskDefinition struct {
 		td        *runner.TaskDefinition
@@ -217,6 +227,23 @@ func (c *JobController) Run(ctx context.Context, runnerName string, jobRequestMe
 
 		// update timeline
 		c.timeline.RecordStarted(timeline.ID(task.ID), time.Now())
+
+		// prepare: resolves next steps
+		if step, ok := task.Task.(step.Preparer); ok {
+			logger.Debug().Str("task_id", task.ID).Msg("running prepare step in controller")
+
+			taskLogWriter := timeline.NewMultiLogWriter(parentLogWriters...)
+
+			stepsToAdd, err := step.Prepare(ctx, taskLogWriter)
+			if err != nil {
+				logger.Error().Err(err).Msg("run step")
+				continue
+			}
+
+			for _, step := range stepsToAdd {
+				c.AddTask(ctx, step, step.ParentID(), step.DisplayName(), step.RefName())
+			}
+		}
 
 		// run task
 		if runnable, ok := task.Task.(runner.Runnable); ok {

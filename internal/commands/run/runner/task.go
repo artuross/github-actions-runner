@@ -17,6 +17,6 @@ type TaskDefinition struct {
 
 type Task interface {
 	ID() string
-	Name() string
+	DisplayName() string
 	Type() string
 }
