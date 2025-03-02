@@ -3,6 +3,7 @@ package jobcontroller
 import (
 	"context"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/artuross/github-actions-runner/internal/commands/run/jobcontroller/internal/queue"
@@ -13,6 +14,7 @@ import (
 	"github.com/artuross/github-actions-runner/internal/defaults"
 	"github.com/artuross/github-actions-runner/internal/repository/ghactions"
 	"github.com/artuross/github-actions-runner/internal/repository/ghapi"
+	"github.com/artuross/github-actions-runner/internal/repository/resultsreceiver"
 	"github.com/rs/zerolog"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -23,12 +25,14 @@ const (
 )
 
 type JobController struct {
-	runnerName    string
-	actionsClient *ghactions.Repository
-	workflowSteps *workflowsteps.Controller
-	timeline      *timeline.Controller
-	tracer        trace.Tracer
-	queueMain     *queue.OrderedQueue
+	runnerName      string
+	actionsClient   *ghactions.Repository
+	workflowSteps   *workflowsteps.Controller
+	resultsReceiver *resultsreceiver.Repository
+	timeline        *timeline.Controller
+	tracer          trace.Tracer
+	allSteps        *queue.OrderedQueue
+	queueMain       *queue.OrderedQueue
 }
 
 func New(
@@ -36,15 +40,18 @@ func New(
 	timeline *timeline.Controller,
 	actionsClient *ghactions.Repository,
 	workflowSteps *workflowsteps.Controller,
+	resultsReceiver *resultsreceiver.Repository,
 	options ...func(*JobController),
 ) *JobController {
 	ctrl := JobController{
-		runnerName:    runnerName,
-		actionsClient: actionsClient,
-		workflowSteps: workflowSteps,
-		timeline:      timeline,
-		tracer:        defaults.TraceProvider.Tracer(tracerName),
-		queueMain:     &queue.OrderedQueue{},
+		runnerName:      runnerName,
+		actionsClient:   actionsClient,
+		workflowSteps:   workflowSteps,
+		resultsReceiver: resultsReceiver,
+		timeline:        timeline,
+		tracer:          defaults.TraceProvider.Tracer(tracerName),
+		allSteps:        &queue.OrderedQueue{},
+		queueMain:       &queue.OrderedQueue{},
 	}
 
 	for _, apply := range options {
@@ -55,27 +62,22 @@ func New(
 }
 
 func (c *JobController) AddStep(ctx context.Context, stepToAdd step.Step) {
-	// add a step to the timeline
-	c.timeline.AddRecord(stepToAdd.ID(), stepToAdd.ParentID(), stepToAdd.DisplayName(), stepToAdd.RefName())
+	// append only
+	c.allSteps.Push(stepToAdd)
 
 	// add a step to the queue
 	c.queueMain.Push(stepToAdd)
 
-	// if task.Type() == "task" {
-	// 	taskCount := 0
-	// 	for _, t := range c.allJobs {
-	// 		if t.Task.Type() == "task" {
-	// 			taskCount++
-	// 		}
-	// 	}
+	// add a step to the timeline
+	c.timeline.AddRecord(stepToAdd.ID(), stepToAdd.ParentID(), stepToAdd.DisplayName(), stepToAdd.RefName())
 
-	// 	c.workflowSteps.SendUpdate(resultsreceiver.Step{
-	// 		ExternalID: task.ID(),
-	// 		Name:       task.Name(),
-	// 		Status:     resultsreceiver.StatusPending,
-	// 		Number:     taskCount + 1,
-	// 	})
-	// }
+	// add a step to the workflow steps
+	c.workflowSteps.SendUpdate(resultsreceiver.Step{
+		ExternalID: stepToAdd.ID(),
+		Name:       stepToAdd.DisplayName(),
+		Status:     resultsreceiver.StatusPending,
+		Number:     c.allSteps.Length(), // 1..N
+	})
 }
 
 func (c *JobController) Run(ctx context.Context, jobDetails *ghapi.PipelineAgentJobRequest) error {
@@ -94,10 +96,15 @@ func (c *JobController) Run(ctx context.Context, jobDetails *ghapi.PipelineAgent
 		}()
 	}
 
-	// if err := c.workflowSteps.Start(ctx); err != nil {
-	// 	logger.Error().Err(err).Msg("start workflow steps controller")
-	// 	return err
-	// }
+	{
+		// workflow steps
+		c.workflowSteps.Start(ctx)
+		defer func() {
+			if err := c.workflowSteps.Shutdown(ctx); err != nil {
+				logger.Error().Err(err).Msg("stop workflow steps controller")
+			}
+		}()
+	}
 
 	{
 		// register job
@@ -118,13 +125,6 @@ func (c *JobController) Run(ctx context.Context, jobDetails *ghapi.PipelineAgent
 			return err
 		}
 
-		// c.queueMain = append(c.queueMain, &runner.TaskDefinition{
-		// 	ID:       initStep.ID(),
-		// 	ParentID: initStep.ParentID(),
-		// 	Task:     initStep,
-		// })
-		//
-
 		c.AddStep(ctx, initStep)
 	}
 
@@ -137,15 +137,20 @@ func (c *JobController) Run(ctx context.Context, jobDetails *ghapi.PipelineAgent
 
 		parentLogWriters := executionContext.LogWriters()
 
-		logWriter := c.timeline.GetLogWriter(ctx, currentStep.ID())
-		logWriter.Write([]byte{0xEF, 0xBB, 0xBF})
+		// for writing timeline logs
+		timelineLogWriter := c.timeline.GetLogWriter(ctx, currentStep.ID())
+		timelineLogWriter.Write([]byte{0xEF, 0xBB, 0xBF})
 
-		executionContext.Push(ctx, currentStep, span, logWriter)
+		// for writing results logs
+		resultsLogWriter := workflowsteps.NewLogWriter(ctx, c.resultsReceiver, jobDetails.Plan.PlanID, jobDetails.JobID, currentStep.ID())
+		resultsLogWriter.Write([]byte{0xEF, 0xBB, 0xBF})
+
+		executionContext.Push(ctx, currentStep, span, timelineLogWriter, timelineLogWriter)
 
 		// update timeline
 		c.timeline.RecordStarted(currentStep.ID(), time.Now())
 
-		taskLogWriter := timeline.NewMultiLogWriter(logWriter, parentLogWriters...)
+		taskLogWriter := NewMultiLogWriter(append([]io.Writer{timelineLogWriter, resultsLogWriter}, parentLogWriters...)...)
 
 		// prepare: resolves next steps
 		if step, ok := currentStep.(step.Preparer); ok {
@@ -181,20 +186,20 @@ func (c *JobController) Run(ctx context.Context, jobDetails *ghapi.PipelineAgent
 				break
 			}
 
-			// if stackedTD.td.Task.Type() == "task" {
-			// 	c.workflowSteps.SendUpdate(workflowsteps.UpdateCompleted{
-			// 		ID:          stackedTD.td.Task.ID(),
-			// 		CompletedAt: time.Now(),
-			// 		Status:      resultsreceiver.StatusCompleted,
-			// 		Conclusion:  resultsreceiver.ConclusionSuccess,
-			// 	})
-			// }
+			// TODO: send real result
+			c.workflowSteps.SendUpdate(workflowsteps.UpdateCompleted{
+				ID:          stepContext.Step.ID(),
+				CompletedAt: time.Now(),
+				Status:      resultsreceiver.StatusCompleted,
+				Conclusion:  resultsreceiver.ConclusionSuccess,
+			})
 
 			// end span
 			stepContext.Span.End()
 
-			// close logger
-			stepContext.LogWriter.Close()
+			// close loggers
+			resultsLogWriter.Close()
+			stepContext.TimelineLogWriter.Close()
 
 			// update record and remove from stack
 			c.timeline.RecordFinished(stepContext.Step.ID(), time.Now())
@@ -203,11 +208,6 @@ func (c *JobController) Run(ctx context.Context, jobDetails *ghapi.PipelineAgent
 			_ = executionContext.Pop()
 		}
 	}
-
-	// shutdown workflow steps controller
-	// if err := c.workflowSteps.Shutdown(ctx); err != nil {
-	// 	logger.Error().Err(err).Msg("stop workflow steps controller")
-	// }
 
 	// mark action as done
 	if err := c.actionsClient.SendEventJobCompleted(ctx, jobDetails.Plan.PlanID, jobDetails.JobID, jobDetails.RequestID); err != nil {

@@ -53,7 +53,7 @@ func (c *Controller) SendUpdate(update Update) {
 	c.updatesChan <- update
 }
 
-func (c *Controller) Start(ctx context.Context) error {
+func (c *Controller) Start(ctx context.Context) {
 	c.wg.Add(1)
 	go func() {
 		defer c.wg.Done()
@@ -175,8 +175,6 @@ func (c *Controller) Start(ctx context.Context) error {
 			}
 		}
 	}()
-
-	return nil
 }
 
 func (c *Controller) Shutdown(ctx context.Context) error {

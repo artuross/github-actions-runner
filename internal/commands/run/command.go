@@ -177,9 +177,11 @@ func createJobControllerFactory(ctx context.Context, runnerName string, tracePro
 		)
 
 		jobController := jobcontroller.New(
+			runnerName,
 			timelineController,
 			actionsClient,
 			wsController,
+			resultsClient,
 			jobcontroller.WithTracerProvider(traceProvider),
 		)
 

@@ -20,6 +20,10 @@ func (oq *OrderedQueue) HasNext() bool {
 	return len(oq.queue) > 0
 }
 
+func (oq *OrderedQueue) Length() int {
+	return len(oq.queue)
+}
+
 // Pop returns and removes first element from the queue.
 func (oq *OrderedQueue) Pop() step.Step {
 	if len(oq.queue) == 0 {

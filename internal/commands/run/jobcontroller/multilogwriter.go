@@ -1,4 +1,4 @@
-package timeline
+package jobcontroller
 
 import (
 	"fmt"
@@ -12,9 +12,9 @@ type MultiLogWriter struct {
 }
 
 // NewMultiLogWriter creates a new MultiLogWriter that writes to multiple writers
-func NewMultiLogWriter(writer io.Writer, writers ...io.Writer) *MultiLogWriter {
+func NewMultiLogWriter(writers ...io.Writer) *MultiLogWriter {
 	return &MultiLogWriter{
-		writers: append([]io.Writer{writer}, writers...),
+		writers: writers,
 	}
 }
 

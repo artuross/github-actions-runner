@@ -5,7 +5,7 @@ func Ptr[T any](v T) *T {
 }
 
 func Value[T any](v *T) T {
-	if v != nil {
+	if v == nil {
 		var zero T
 		return zero
 	}

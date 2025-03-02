@@ -9,10 +9,11 @@ import (
 )
 
 type StepContext struct {
-	Step      step.Step
-	Ctx       context.Context
-	Span      trace.Span
-	LogWriter io.WriteCloser
+	Step              step.Step
+	Ctx               context.Context
+	Span              trace.Span
+	TimelineLogWriter io.WriteCloser
+	ResultsLogWriter  io.WriteCloser
 }
 
 type ExecutionContext struct {
@@ -50,12 +51,13 @@ func (ec *ExecutionContext) Pop() *StepContext {
 	return last
 }
 
-func (ec *ExecutionContext) Push(ctx context.Context, step step.Step, span trace.Span, logWriter io.WriteCloser) {
+func (ec *ExecutionContext) Push(ctx context.Context, step step.Step, span trace.Span, timelineLogWriter, resultsLogWriter io.WriteCloser) {
 	ec.stack = append(ec.stack, &StepContext{
-		Step:      step,
-		Ctx:       ctx,
-		Span:      span,
-		LogWriter: logWriter,
+		Step:              step,
+		Ctx:               ctx,
+		Span:              span,
+		TimelineLogWriter: timelineLogWriter,
+		ResultsLogWriter:  resultsLogWriter,
 	})
 }
 
@@ -74,7 +76,7 @@ func (ec *ExecutionContext) LogWriters() []io.Writer {
 
 	writers := make([]io.Writer, 0, len(ec.stack))
 	for _, writer := range ec.stack {
-		writers = append(writers, writer.LogWriter)
+		writers = append(writers, writer.TimelineLogWriter, writer.ResultsLogWriter)
 	}
 
 	return writers
