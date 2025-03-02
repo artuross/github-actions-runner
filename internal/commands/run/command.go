@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -16,6 +17,7 @@ import (
 	"github.com/artuross/github-actions-runner/internal/commands/run/timeline"
 	"github.com/artuross/github-actions-runner/internal/commands/run/workflowsteps"
 	"github.com/artuross/github-actions-runner/internal/oauth/actions"
+	"github.com/artuross/github-actions-runner/internal/repository/blobstorage"
 	"github.com/artuross/github-actions-runner/internal/repository/ghactions"
 	"github.com/artuross/github-actions-runner/internal/repository/ghapi"
 	"github.com/artuross/github-actions-runner/internal/repository/ghbroker"
@@ -151,6 +153,8 @@ func createJobControllerFactory(ctx context.Context, runnerName string, tracePro
 			),
 		)
 
+		noAuthHttpClient := http.Client{}
+
 		actionsClient := ghactions.New(
 			jobDetails.Resources.Endpoints[0].ActionsServiceURL,
 			ghactions.WithHTTPClient(httpClient),
@@ -161,6 +165,11 @@ func createJobControllerFactory(ctx context.Context, runnerName string, tracePro
 			jobDetails.Resources.Endpoints[0].ResultsServiceURL,
 			resultsreceiver.WithHTTPClient(httpClient),
 			resultsreceiver.WithTracerProvider(traceProvider),
+		)
+
+		blobClient := blobstorage.New(
+			blobstorage.WithHTTPClient(&noAuthHttpClient),
+			blobstorage.WithTracerProvider(traceProvider),
 		)
 
 		timelineController := timeline.NewController(
@@ -182,6 +191,7 @@ func createJobControllerFactory(ctx context.Context, runnerName string, tracePro
 			actionsClient,
 			wsController,
 			resultsClient,
+			blobClient,
 			jobcontroller.WithTracerProvider(traceProvider),
 		)
 

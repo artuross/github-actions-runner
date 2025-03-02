@@ -4,16 +4,23 @@ import (
 	"context"
 	"io"
 
+	"github.com/artuross/github-actions-runner/internal/commands/run/log/windowedbuffer"
 	"github.com/artuross/github-actions-runner/internal/commands/run/step"
 	"go.opentelemetry.io/otel/trace"
 )
+
+type LogWriter interface {
+	io.WriteCloser
+	WindowedBuffer() *windowedbuffer.WindowedBuffer
+}
 
 type StepContext struct {
 	Step              step.Step
 	Ctx               context.Context
 	Span              trace.Span
-	TimelineLogWriter io.WriteCloser
-	ResultsLogWriter  io.WriteCloser
+	LogWriter         LogWriter
+	ResultsLogReader  io.Closer
+	TimelineLogReader io.Closer
 }
 
 type ExecutionContext struct {
@@ -51,13 +58,14 @@ func (ec *ExecutionContext) Pop() *StepContext {
 	return last
 }
 
-func (ec *ExecutionContext) Push(ctx context.Context, step step.Step, span trace.Span, timelineLogWriter, resultsLogWriter io.WriteCloser) {
+func (ec *ExecutionContext) Push(ctx context.Context, step step.Step, span trace.Span, logWriter LogWriter, resultsLogReader, timelineLogReader io.Closer) {
 	ec.stack = append(ec.stack, &StepContext{
 		Step:              step,
 		Ctx:               ctx,
 		Span:              span,
-		TimelineLogWriter: timelineLogWriter,
-		ResultsLogWriter:  resultsLogWriter,
+		LogWriter:         logWriter,
+		ResultsLogReader:  resultsLogReader,
+		TimelineLogReader: timelineLogReader,
 	})
 }
 
@@ -67,17 +75,4 @@ func (ec *ExecutionContext) Context() context.Context {
 	}
 
 	return ec.stack[len(ec.stack)-1].Ctx
-}
-
-func (ec *ExecutionContext) LogWriters() []io.Writer {
-	if len(ec.stack) == 0 {
-		return nil
-	}
-
-	writers := make([]io.Writer, 0, len(ec.stack))
-	for _, writer := range ec.stack {
-		writers = append(writers, writer.TimelineLogWriter, writer.ResultsLogWriter)
-	}
-
-	return writers
 }

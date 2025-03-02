@@ -42,7 +42,10 @@ func NewInternalStart(jobID string, initialSteps []ghapi.Step) (*InternalStart, 
 
 // for Preparer
 // TODO: actually return true implementations
-func (s *InternalStart) Prepare(_ context.Context, _ io.Writer) ([]Step, error) {
+func (s *InternalStart) Prepare(_ context.Context, logWriter io.Writer) ([]Step, error) {
+	fmt.Fprintf(logWriter, "%s start task '%s' with id %s\n", getTime(), s.displayName, s.id)
+	defer fmt.Fprintf(logWriter, "%s finish task '%s' with id %s\n", getTime(), s.displayName, s.id)
+
 	steps := make([]Step, 0, len(s.initialSteps))
 
 	for _, stepDef := range s.initialSteps {

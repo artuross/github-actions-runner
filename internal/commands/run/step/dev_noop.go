@@ -21,7 +21,7 @@ func (s *Noop) Run(ctx context.Context, logWriter io.Writer) error {
 	fmt.Fprintf(logWriter, "%s start task '%s' with id %s\n", getTime(), s.displayName, s.id)
 	defer fmt.Fprintf(logWriter, "%s finish task '%s' with id %s\n", getTime(), s.displayName, s.id)
 
-	time.Sleep(time.Second)
+	time.Sleep(10 * time.Second)
 
 	return nil
 }

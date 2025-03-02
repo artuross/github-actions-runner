@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/artuross/github-actions-runner/internal/repository/resultsreceiver"
-	"github.com/kr/pretty"
 )
 
 type Update any
@@ -75,8 +74,6 @@ func (c *Controller) Start(ctx context.Context) {
 				}
 
 				c.state = append(c.state, update)
-
-				pretty.Println(c.state)
 
 				if slices.ContainsFunc(c.state, stepWithID(update.ExternalID)) {
 					c.unsyncedIDs = append(c.unsyncedIDs, update.ExternalID)
