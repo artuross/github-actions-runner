@@ -19,7 +19,7 @@ type Repository struct {
 func New(client *github.Client, options ...func(*Repository)) *Repository {
 	repository := Repository{
 		client: client,
-		tracer: defaults.TraceProvider.Tracer(tracerName),
+		tracer: defaults.TracerProvider.Tracer(tracerName),
 	}
 
 	for _, apply := range options {

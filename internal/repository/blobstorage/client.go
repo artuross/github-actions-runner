@@ -24,7 +24,7 @@ type Repository struct {
 func New(options ...func(*Repository)) *Repository {
 	repository := Repository{
 		httpClient: defaults.HTTPClient,
-		tracer:     defaults.TraceProvider.Tracer(tracerName),
+		tracer:     defaults.TracerProvider.Tracer(tracerName),
 	}
 
 	for _, apply := range options {
@@ -35,6 +35,9 @@ func New(options ...func(*Repository)) *Repository {
 }
 
 func (r *Repository) UploadFile(ctx context.Context, url string, data []byte) error {
+	ctx, span := r.tracer.Start(ctx, "UploadFile")
+	defer span.End()
+
 	headers := http.Header{}
 	headers.Set("x-ms-blob-type", "BlockBlob")
 	headers.Set("x-ms-blob-content-type", "text/plain") // TODO: from params?

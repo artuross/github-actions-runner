@@ -67,7 +67,7 @@ func run(cliCtx *cli.Context) error {
 
 	config.Print(cfg)
 
-	traceProvider, tpShutdown, err := commandinit.NewOpenTelemetry(ctx, "runner")
+	tracerProvider, tpShutdown, err := commandinit.NewOpenTelemetry(ctx, "runner")
 	if err != nil {
 		return fmt.Errorf("create OTEL provider: %w", err)
 	}
@@ -86,19 +86,19 @@ func run(cliCtx *cli.Context) error {
 
 	ghRESTClient := ghrest.New(
 		ghAPIClient,
-		ghrest.WithTracerProvider(traceProvider),
+		ghrest.WithTracerProvider(tracerProvider),
 	)
 
 	ghRunnerClient := ghrunner.New(
 		"https://api.github.com",
 		ghrunner.WithHTTPClient(http.DefaultClient), // TODO: use something better
-		ghrunner.WithTracerProvider(traceProvider),
+		ghrunner.WithTracerProvider(tracerProvider),
 	)
 
 	ghActionsClient := ghactions.New(
 		"https://UNKNOWN.actions.githubusercontent.com/",
 		ghactions.WithHTTPClient(http.DefaultClient), // TODO: use something better
-		ghactions.WithTracerProvider(traceProvider),
+		ghactions.WithTracerProvider(tracerProvider),
 	)
 
 	execConfig := exec.Config{
@@ -110,7 +110,7 @@ func run(cliCtx *cli.Context) error {
 		RunnerLabel:          cfg.RunnerLabel,
 	}
 
-	executor := exec.NewExecutor(ghActionsClient, ghRESTClient, ghRunnerClient, exec.WithTracerProvider(traceProvider))
+	executor := exec.NewExecutor(ghActionsClient, ghRESTClient, ghRunnerClient, exec.WithTracerProvider(tracerProvider))
 	if err := executor.Run(ctx, execConfig); err != nil {
 		return fmt.Errorf("run command: %w", err)
 	}

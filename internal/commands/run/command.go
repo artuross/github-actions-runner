@@ -68,7 +68,7 @@ func run(cliCtx *cli.Context) error {
 		return ErrCommandFailed
 	}
 
-	traceProvider, tpShutdown, err := commandinit.NewOpenTelemetry(ctx, "runner")
+	tracerProvider, tpShutdown, err := commandinit.NewOpenTelemetry(ctx, "runner")
 	if err != nil {
 		logger.Error().Err(err).Msg("init OTEL provider")
 		return ErrCommandFailed
@@ -87,12 +87,12 @@ func run(cliCtx *cli.Context) error {
 	ghActionsClient := ghactions.New(
 		runnerConfig.ShardURL,
 		ghactions.WithHTTPClient(httpClient),
-		ghactions.WithTracerProvider(traceProvider),
+		ghactions.WithTracerProvider(tracerProvider),
 	)
 
 	ghBrokerClient := ghbroker.New(
 		ghbroker.WithHTTPClient(httpClient),
-		ghbroker.WithTracerProvider(traceProvider),
+		ghbroker.WithTracerProvider(tracerProvider),
 	)
 
 	ctx, cancel := context.WithCancelCause(ctx)
@@ -116,21 +116,21 @@ func run(cliCtx *cli.Context) error {
 		ghActionsClient,
 		ghBrokerClient,
 		runnerConfig,
-		joblistener.WithTracerProvider(traceProvider),
+		joblistener.WithTracerProvider(tracerProvider),
 	)
 
 	jobWorker := jobworker.New(
 		ghActionsClient,
 		ghBrokerClient,
 		runnerConfig,
-		createJobControllerFactory(ctx, runnerConfig.RunnerName, traceProvider),
-		jobworker.WithTracerProvider(traceProvider),
+		createJobControllerFactory(ctx, runnerConfig.RunnerName, tracerProvider),
+		jobworker.WithTracerProvider(tracerProvider),
 	)
 
 	jobManager := manager.New(
 		jobListener,
 		jobWorker,
-		manager.WithTracerProvider(traceProvider),
+		manager.WithTracerProvider(tracerProvider),
 	)
 
 	if err := jobManager.Run(ctx); err != nil && !errors.Is(err, errInterrupted) {
@@ -142,7 +142,7 @@ func run(cliCtx *cli.Context) error {
 
 type JobControllerFactory func(jobDetails ghapi.PipelineAgentJobRequest) (*jobcontroller.JobController, error)
 
-func createJobControllerFactory(ctx context.Context, runnerName string, traceProvider trace.TracerProvider) jobworker.JobControllerFactory {
+func createJobControllerFactory(ctx context.Context, runnerName string, tracerProvider trace.TracerProvider) jobworker.JobControllerFactory {
 	return func(jobDetails ghapi.PipelineAgentJobRequest) (*jobcontroller.JobController, error) {
 		httpClient := oauth2.NewClient(
 			ctx,
@@ -158,18 +158,18 @@ func createJobControllerFactory(ctx context.Context, runnerName string, tracePro
 		actionsClient := ghactions.New(
 			jobDetails.Resources.Endpoints[0].ActionsServiceURL,
 			ghactions.WithHTTPClient(httpClient),
-			ghactions.WithTracerProvider(traceProvider),
+			ghactions.WithTracerProvider(tracerProvider),
 		)
 
 		resultsClient := resultsreceiver.New(
 			jobDetails.Resources.Endpoints[0].ResultsServiceURL,
 			resultsreceiver.WithHTTPClient(httpClient),
-			resultsreceiver.WithTracerProvider(traceProvider),
+			resultsreceiver.WithTracerProvider(tracerProvider),
 		)
 
 		blobClient := blobstorage.New(
 			blobstorage.WithHTTPClient(&noAuthHttpClient),
-			blobstorage.WithTracerProvider(traceProvider),
+			blobstorage.WithTracerProvider(tracerProvider),
 		)
 
 		timelineController := timeline.NewController(
@@ -177,6 +177,7 @@ func createJobControllerFactory(ctx context.Context, runnerName string, tracePro
 			runnerName,
 			jobDetails.Plan.PlanID,
 			jobDetails.Timeline.ID,
+			timeline.WithTracerProvider(tracerProvider),
 		)
 
 		wsController := workflowsteps.NewController(
@@ -192,7 +193,7 @@ func createJobControllerFactory(ctx context.Context, runnerName string, tracePro
 			wsController,
 			resultsClient,
 			blobClient,
-			jobcontroller.WithTracerProvider(traceProvider),
+			jobcontroller.WithTracerProvider(tracerProvider),
 		)
 
 		return jobController, nil

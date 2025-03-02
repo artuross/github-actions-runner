@@ -57,7 +57,7 @@ func (oq *OrderedQueue) Push(item step.Step) {
 	queue = append(queue, item)
 	queue = append(queue, oq.queue[insertIndex:]...)
 
-	oq.queue = append(oq.queue, item)
+	oq.queue = queue
 }
 
 func isParentOrSibling(id string, s step.Step) bool {

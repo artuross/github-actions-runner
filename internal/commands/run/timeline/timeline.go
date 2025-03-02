@@ -3,13 +3,14 @@ package timeline
 import (
 	"context"
 	"fmt"
-	"io"
 	"slices"
 	"sync"
 	"time"
 
+	"github.com/artuross/github-actions-runner/internal/defaults"
 	"github.com/artuross/github-actions-runner/internal/helpers/to"
 	"github.com/artuross/github-actions-runner/internal/repository/ghactions"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type ID string
@@ -101,6 +102,7 @@ type Controller struct {
 	runnerName string
 	planID     string
 	timelineID string
+	tracer     trace.Tracer
 
 	shutdownSignal chan struct{}
 	wg             sync.WaitGroup
@@ -110,12 +112,18 @@ type Controller struct {
 	serverState    []Record
 }
 
-func NewController(ghClient *ghactions.Repository, runnerName, planID, timelineID string) *Controller {
-	return &Controller{
+const (
+	// TODO: may want to do it via debug.ReadBuildInfo
+	tracerName = "github.com/artuross/github-actions-runner/internal/commands/run/timeline"
+)
+
+func NewController(ghClient *ghactions.Repository, runnerName, planID, timelineID string, options ...func(*Controller)) *Controller {
+	ctrl := Controller{
 		ghClient:   ghClient,
 		runnerName: runnerName,
 		planID:     planID,
 		timelineID: timelineID,
+		tracer:     defaults.TracerProvider.Tracer(tracerName),
 
 		shutdownSignal: make(chan struct{}),
 		wg:             sync.WaitGroup{},
@@ -124,6 +132,12 @@ func NewController(ghClient *ghactions.Repository, runnerName, planID, timelineI
 		localState:     make([]Record, 0),
 		serverState:    make([]Record, 0),
 	}
+
+	for _, apply := range options {
+		apply(&ctrl)
+	}
+
+	return &ctrl
 }
 
 func (c *Controller) Start(ctx context.Context) {
@@ -137,7 +151,7 @@ func (c *Controller) Start(ctx context.Context) {
 	// it will be used to throttle updates
 	timerChan := noopChan
 
-	tick := func() bool {
+	tick := func(ctx context.Context) bool {
 		if len(c.queuedUpdates) == 0 {
 			timerChan = noopChan
 
@@ -151,6 +165,9 @@ func (c *Controller) Start(ctx context.Context) {
 
 	c.wg.Add(1)
 	go func() {
+		ctx, span := c.tracer.Start(ctx, "timeline:run")
+		defer span.End()
+
 		defer c.wg.Done()
 
 		for {
@@ -175,7 +192,7 @@ func (c *Controller) Start(ctx context.Context) {
 				}
 
 				// do pending updates
-				tick()
+				tick(ctx)
 
 				return
 
@@ -189,7 +206,7 @@ func (c *Controller) Start(ctx context.Context) {
 				}
 
 			case <-timerChan:
-				if !tick() {
+				if !tick(ctx) {
 					continue
 				}
 
@@ -231,10 +248,6 @@ func (c *Controller) AddRecord(id string, parentID string, name, refName string)
 	}
 }
 
-func (c *Controller) GetLogWriter(ctx context.Context, id string) io.WriteCloser {
-	return NewLogWriter(ctx, c.ghClient, c, c.planID, id)
-}
-
 func (c *Controller) RecordLogUploaded(id string, logID int64) {
 	c.queueChan <- LogUploaded{
 		ID:    ID(id),
@@ -268,6 +281,9 @@ func (c *Controller) Shutdown(ctx context.Context) error {
 }
 
 func (c *Controller) tick(ctx context.Context) {
+	ctx, span := c.tracer.Start(ctx, "tick")
+	defer span.End()
+
 	for _, update := range c.queuedUpdates {
 		switch update := update.(type) {
 		case Record:
@@ -555,4 +571,10 @@ func convertToAPIDiffs(diffs []RecordDiff, runnerName string) []ghactions.Timeli
 	}
 
 	return apiDiffs
+}
+
+func WithTracerProvider(tp trace.TracerProvider) func(*Controller) {
+	return func(r *Controller) {
+		r.tracer = tp.Tracer(tracerName)
+	}
 }

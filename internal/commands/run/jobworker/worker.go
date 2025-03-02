@@ -41,7 +41,7 @@ func New(
 	worker := Worker{
 		actionsClient:        actionsClient,
 		brokerClient:         brokerClient,
-		tracer:               defaults.TraceProvider.Tracer(tracerName),
+		tracer:               defaults.TracerProvider.Tracer(tracerName),
 		config:               config,
 		jobControllerFactory: jobControllerFactory,
 	}

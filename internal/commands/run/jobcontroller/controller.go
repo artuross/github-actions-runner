@@ -55,7 +55,7 @@ func New(
 		resultsReceiver: resultsReceiver,
 		blobStorage:     blobStorage,
 		timeline:        timeline,
-		tracer:          defaults.TraceProvider.Tracer(tracerName),
+		tracer:          defaults.TracerProvider.Tracer(tracerName),
 		allSteps:        &queue.OrderedQueue{},
 		queueMain:       &queue.OrderedQueue{},
 	}

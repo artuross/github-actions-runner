@@ -7,6 +7,6 @@ import (
 )
 
 var (
-	HTTPClient    = http.DefaultClient
-	TraceProvider = noop.NewTracerProvider()
+	HTTPClient     = http.DefaultClient
+	TracerProvider = noop.NewTracerProvider()
 )

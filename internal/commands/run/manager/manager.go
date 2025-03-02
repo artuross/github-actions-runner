@@ -53,7 +53,7 @@ func New(listener Listener, worker Worker, options ...func(*Manager)) *Manager {
 		},
 		listener: listener,
 		worker:   worker,
-		tracer:   defaults.TraceProvider.Tracer(tracerName),
+		tracer:   defaults.TracerProvider.Tracer(tracerName),
 	}
 
 	for _, apply := range options {

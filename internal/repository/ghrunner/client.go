@@ -27,7 +27,7 @@ type Repository struct {
 func New(baseURL string, options ...func(*Repository)) *Repository {
 	repository := Repository{
 		httpClient: defaults.HTTPClient,
-		tracer:     defaults.TraceProvider.Tracer(tracerName),
+		tracer:     defaults.TracerProvider.Tracer(tracerName),
 		baseURL:    getBaseURL(baseURL),
 	}
 

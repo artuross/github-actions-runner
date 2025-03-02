@@ -26,7 +26,7 @@ type Repository struct {
 func New(options ...func(*Repository)) *Repository {
 	repository := Repository{
 		httpClient: defaults.HTTPClient,
-		tracer:     defaults.TraceProvider.Tracer(tracerName),
+		tracer:     defaults.TracerProvider.Tracer(tracerName),
 	}
 
 	for _, apply := range options {

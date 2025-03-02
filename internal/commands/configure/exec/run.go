@@ -46,7 +46,7 @@ func NewExecutor(
 		actionsClient: actionsClient,
 		restClient:    restClient,
 		runnerClient:  runnerClient,
-		tracer:        defaults.TraceProvider.Tracer(tracerName),
+		tracer:        defaults.TracerProvider.Tracer(tracerName),
 	}
 
 	for _, apply := range options {

@@ -34,7 +34,7 @@ func NewOpenTelemetry(ctx context.Context, serviceName string) (trace.TracerProv
 		return nil, noopShutdown, fmt.Errorf("create OTEL resource: %w", err)
 	}
 
-	traceProvider := sdktrace.NewTracerProvider(
+	tracerProvider := sdktrace.NewTracerProvider(
 		sdktrace.WithBatcher(
 			exporter,
 			sdktrace.WithBlocking(),
@@ -45,5 +45,5 @@ func NewOpenTelemetry(ctx context.Context, serviceName string) (trace.TracerProv
 		sdktrace.WithSampler(sdktrace.AlwaysSample()),
 	)
 
-	return traceProvider, traceProvider.Shutdown, nil
+	return tracerProvider, tracerProvider.Shutdown, nil
 }
