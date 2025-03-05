@@ -95,7 +95,9 @@ func (m *Manager) Run(ctx context.Context) error {
 
 	// TODO: probably don't need this?
 	ctx, cancel := context.WithCancelCause(ctx)
-	defer cancel(nil)
+	defer func() {
+		cancel(nil)
+	}()
 
 	group, ctx := errgroup.WithContext(ctx)
 

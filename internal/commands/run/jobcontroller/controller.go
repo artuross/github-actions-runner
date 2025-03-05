@@ -14,6 +14,7 @@ import (
 	"github.com/artuross/github-actions-runner/internal/commands/run/timeline"
 	"github.com/artuross/github-actions-runner/internal/commands/run/workflowsteps"
 	"github.com/artuross/github-actions-runner/internal/defaults"
+	"github.com/artuross/github-actions-runner/internal/log/semconv"
 	"github.com/artuross/github-actions-runner/internal/repository/blobstorage"
 	"github.com/artuross/github-actions-runner/internal/repository/ghactions"
 	"github.com/artuross/github-actions-runner/internal/repository/ghapi"
@@ -226,7 +227,7 @@ func (c *JobController) Run(ctx context.Context, jobDetails *ghapi.PipelineAgent
 
 		// prepare: resolves next steps
 		if step, ok := currentStep.(step.Preparer); ok {
-			logger.Debug().Str("task_id", currentStep.ID()).Msg("running prepare step in controller")
+			logger.Debug().Str(semconv.StepID, currentStep.ID()).Msg("running prepare step in controller")
 
 			stepsToAdd, err := step.Prepare(ctx, stepLogWriter)
 			if err != nil {
@@ -241,7 +242,7 @@ func (c *JobController) Run(ctx context.Context, jobDetails *ghapi.PipelineAgent
 
 		// runner: runs the main thing
 		if step, ok := currentStep.(step.Runner); ok {
-			logger.Debug().Str("task_id", currentStep.ID()).Msg("running runner step in controller")
+			logger.Debug().Str(semconv.StepID, currentStep.ID()).Msg("running runner step in controller")
 
 			if err := step.Run(ctx, stepLogWriter); err != nil {
 				logger.Error().Err(err).Msg("run step")

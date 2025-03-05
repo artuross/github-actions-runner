@@ -8,6 +8,7 @@ import (
 
 	"github.com/artuross/github-actions-runner/internal/commands/run/manager"
 	"github.com/artuross/github-actions-runner/internal/defaults"
+	"github.com/artuross/github-actions-runner/internal/log/semconv"
 	"github.com/artuross/github-actions-runner/internal/repository/ghactions"
 	"github.com/artuross/github-actions-runner/internal/repository/ghapi"
 	"github.com/artuross/github-actions-runner/internal/repository/ghbroker"
@@ -62,7 +63,7 @@ func (l *Listener) Run(ctx context.Context, getState func() manager.State, start
 
 		ctx := context.WithoutCancel(ctx)
 
-		logger.Debug().Str("sessionID", sessionID).Msg("deleting session")
+		logger.Debug().Str(semconv.SessionID, sessionID).Msg("deleting session")
 
 		if err := l.actionsClient.DeleteSession(ctx, l.config.RunnerGroupID, sessionID); err != nil {
 			logger.Error().Err(err).Msg("delete session")
@@ -85,10 +86,10 @@ func (l *Listener) Run(ctx context.Context, getState func() manager.State, start
 		}
 
 		logger.Debug().
-			Int64("runnerID", l.config.RunnerID).
+			Int64(semconv.RunnerID, l.config.RunnerID).
 			Msg("fetching pool message")
 
-		message, err := messageClient.GetPoolMessage(ctx, sessionID, l.config.RunnerGroupID, ghapi.RunnerStatusOnline)
+		message, err := messageClient.GetPoolMessage(ctx, sessionID, l.config.RunnerGroupID, ghapi.RunnerStatus(getState().Status))
 		if errors.Is(err, ghbroker.ErrorEmptyBody) {
 			logger.Info().Msg("no message")
 			continue
@@ -99,7 +100,7 @@ func (l *Listener) Run(ctx context.Context, getState func() manager.State, start
 			continue
 		}
 
-		logger.Info().Int64("message_id", message.MessageID).Msg("received BrokerMessage")
+		logger.Info().Int64(semconv.MessageID, message.MessageID).Msg("received BrokerMessage")
 
 		runnerJobRequest, ok := message.Message.(ghapi.MessageRunnerJobRequest)
 		if !ok {
@@ -144,7 +145,7 @@ func (l *Listener) createSession(ctx context.Context, poolID int64, runnerID int
 			tickerConsumed = true
 		}
 
-		logger.Debug().Int64("runner_id", runnerID).Msg("creating session")
+		logger.Debug().Int64(semconv.RunnerID, runnerID).Msg("creating session")
 
 		session, err := l.actionsClient.CreateSession(ctx, poolID, runnerID, runnerName)
 		// TODO: handle context exit
