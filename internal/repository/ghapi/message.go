@@ -66,6 +66,7 @@ type Endpoint struct {
 	Authorization     EndpointAuthorization
 	ActionsServiceURL string
 	ResultsServiceURL string
+	LogStreamURL      string
 }
 
 type Resources struct {

@@ -19,6 +19,12 @@ type UpdateCompleted struct {
 	CompletedAt time.Time
 }
 
+type UpdateInProgress struct {
+	ID        string
+	Status    resultsreceiver.Status
+	StartedAt time.Time
+}
+
 type Controller struct {
 	resultsClient    *resultsreceiver.Repository
 	workflowJobRunID string
@@ -77,6 +83,29 @@ func (c *Controller) Start(ctx context.Context) {
 
 				if slices.ContainsFunc(c.state, stepWithID(update.ExternalID)) {
 					c.unsyncedIDs = append(c.unsyncedIDs, update.ExternalID)
+				}
+
+			case UpdateInProgress:
+				if !isSet {
+					isSet = true
+					timer.Reset(100 * time.Millisecond)
+					c.nextChangeID++
+				}
+
+				index := slices.IndexFunc(c.state, stepWithID(update.ID))
+				if index == -1 {
+					return
+				}
+
+				step := c.state[index]
+
+				step.Status = update.Status
+				step.StartedAt = &update.StartedAt
+
+				c.state[index] = step
+
+				if slices.ContainsFunc(c.state, stepWithID(update.ID)) {
+					c.unsyncedIDs = append(c.unsyncedIDs, update.ID)
 				}
 
 			case UpdateCompleted:

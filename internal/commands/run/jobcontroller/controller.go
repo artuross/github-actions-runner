@@ -8,6 +8,7 @@ import (
 
 	"github.com/artuross/github-actions-runner/internal/commands/run/jobcontroller/internal/queue"
 	"github.com/artuross/github-actions-runner/internal/commands/run/jobcontroller/internal/stack"
+	"github.com/artuross/github-actions-runner/internal/commands/run/livelogs"
 	"github.com/artuross/github-actions-runner/internal/commands/run/log/buffer"
 	"github.com/artuross/github-actions-runner/internal/commands/run/log/uploader"
 	"github.com/artuross/github-actions-runner/internal/commands/run/step"
@@ -19,6 +20,7 @@ import (
 	"github.com/artuross/github-actions-runner/internal/repository/ghactions"
 	"github.com/artuross/github-actions-runner/internal/repository/ghapi"
 	"github.com/artuross/github-actions-runner/internal/repository/resultsreceiver"
+	"github.com/kr/pretty"
 	"github.com/rs/zerolog"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -90,10 +92,25 @@ func (c *JobController) AddStep(ctx context.Context, stepToAdd step.Step) {
 func (c *JobController) Run(ctx context.Context, jobDetails *ghapi.PipelineAgentJobRequest) error {
 	wg := sync.WaitGroup{}
 
+	pretty.Println(jobDetails)
+
 	ctx, span := c.tracer.Start(ctx, "run job")
 	defer span.End()
 
 	logger := zerolog.Ctx(ctx)
+
+	wsConnection, err := livelogs.NewConnection(ctx, jobDetails.Resources.Endpoints[0].LogStreamURL, jobDetails.Resources.Endpoints[0].Authorization.Parameters.AccessToken)
+	if err != nil {
+		return fmt.Errorf("create logs WebSocket connection: %w", err)
+	}
+	defer func() {
+		if err := wsConnection.Close(); err != nil {
+			logger.Error().Err(err).Msg("close websocket conn")
+		}
+	}()
+
+	jobLogUploaderFactory := workflowsteps.JobUploader(c.resultsReceiver, c.blobStorage)
+	stepLogUploaderFactory := workflowsteps.StepUploader(c.resultsReceiver, c.blobStorage)
 
 	c.timeline.Start(ctx)
 	c.workflowSteps.Start(ctx)
@@ -108,12 +125,7 @@ func (c *JobController) Run(ctx context.Context, jobDetails *ghapi.PipelineAgent
 	jobResultsLogUploader := uploader.New(
 		jobResultsLogReader,
 		workflowsteps.LogFileMaxSize,
-		workflowsteps.JobUploader(
-			c.resultsReceiver,
-			c.blobStorage,
-			jobDetails.Plan.PlanID,
-			jobDetails.JobID,
-		),
+		jobLogUploaderFactory(jobDetails.Plan.PlanID, jobDetails.JobID),
 	)
 
 	wg.Add(1)
@@ -163,8 +175,27 @@ func (c *JobController) Run(ctx context.Context, jobDetails *ghapi.PipelineAgent
 
 	executionContext := stack.NewExecutionContext(ctx)
 
+	time.Sleep(time.Second)
 	for c.queueMain.HasNext() {
 		currentStep := c.queueMain.Pop()
+
+		c.workflowSteps.SendUpdate(workflowsteps.UpdateInProgress{
+			ID:        currentStep.ID(),
+			Status:    resultsreceiver.StatusInProgress,
+			StartedAt: time.Now(),
+		})
+
+		time.Sleep(time.Second * 5)
+
+		for index := range 100 {
+			fmt.Println(wsConnection.SendLines(
+				currentStep.ID(),
+				[]string{
+					fmt.Sprintf("%d", index),
+				},
+			))
+			time.Sleep(time.Second / 5)
+		}
 
 		ctx, span := c.tracer.Start(executionContext.Context(), fmt.Sprintf("run step %s", currentStep.ID()))
 
@@ -180,13 +211,7 @@ func (c *JobController) Run(ctx context.Context, jobDetails *ghapi.PipelineAgent
 		stepResultsLogUploader := uploader.New(
 			stepResultsLogReader,
 			workflowsteps.LogFileMaxSize,
-			workflowsteps.StepUploader(
-				c.resultsReceiver,
-				c.blobStorage,
-				jobDetails.Plan.PlanID,
-				jobDetails.JobID,
-				currentStep.ID(),
-			),
+			stepLogUploaderFactory(jobDetails.Plan.PlanID, jobDetails.JobID, currentStep.ID()),
 		)
 
 		wg.Add(1)

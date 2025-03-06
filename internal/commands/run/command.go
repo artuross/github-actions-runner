@@ -33,11 +33,8 @@ var ErrCommandFailed = errors.New("command failed")
 
 func NewCommand() *cli.Command {
 	return &cli.Command{
-		Name:  "run",
-		Usage: "Starts a runner.",
-		Flags: []cli.Flag{
-			// TODO: add flags
-		},
+		Name:   "run",
+		Usage:  "Starts a runner.",
 		Action: run,
 	}
 }

@@ -113,6 +113,7 @@ func (w *Wrapper) UnmarshalJSON(data []byte) error {
 			}
 
 			internalData struct {
+				FeedStreamURL     string `json:"FeedStreamUrl"`
 				ResultsServiceURL string `json:"ResultsServiceUrl"`
 			}
 
@@ -152,7 +153,7 @@ func (w *Wrapper) UnmarshalJSON(data []byte) error {
 					Reference:   reference,
 					ID:          is.Id,
 					ContextName: is.ContextName,
-					DisplayName:        is.Name,
+					DisplayName: is.Name,
 				}
 
 				steps = append(steps, step)
@@ -172,6 +173,7 @@ func (w *Wrapper) UnmarshalJSON(data []byte) error {
 						},
 					},
 					ActionsServiceURL: ie.URL,
+					LogStreamURL:      ie.Data.FeedStreamURL,
 					ResultsServiceURL: ie.Data.ResultsServiceURL,
 				}
 
