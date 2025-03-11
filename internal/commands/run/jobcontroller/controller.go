@@ -81,12 +81,7 @@ func (c *JobController) AddStep(ctx context.Context, stepToAdd step.Step) {
 	c.timeline.AddRecord(stepToAdd.ID(), stepToAdd.ParentID(), stepToAdd.DisplayName(), stepToAdd.RefName())
 
 	// add a step to the workflow steps
-	c.workflowSteps.SendUpdate(resultsreceiver.Step{
-		ExternalID: stepToAdd.ID(),
-		Name:       stepToAdd.DisplayName(),
-		Status:     resultsreceiver.StatusPending,
-		Number:     c.allSteps.Length(), // 1..N
-	})
+	c.workflowSteps.EventAddStep(stepToAdd.ID(), stepToAdd.ParentID(), stepToAdd.DisplayName(), c.allSteps.Length())
 }
 
 func (c *JobController) Run(ctx context.Context, jobDetails *ghapi.PipelineAgentJobRequest) error {
@@ -179,15 +174,9 @@ func (c *JobController) Run(ctx context.Context, jobDetails *ghapi.PipelineAgent
 	for c.queueMain.HasNext() {
 		currentStep := c.queueMain.Pop()
 
-		c.workflowSteps.SendUpdate(workflowsteps.UpdateInProgress{
-			ID:        currentStep.ID(),
-			Status:    resultsreceiver.StatusInProgress,
-			StartedAt: time.Now(),
-		})
+		c.workflowSteps.EventStatusInProgress(currentStep.ID(), time.Now())
 
-		time.Sleep(time.Second * 5)
-
-		for index := range 100 {
+		for index := range 30 {
 			fmt.Println(wsConnection.SendLines(
 				currentStep.ID(),
 				[]string{
@@ -285,12 +274,7 @@ func (c *JobController) Run(ctx context.Context, jobDetails *ghapi.PipelineAgent
 			}
 
 			// TODO: send real result
-			c.workflowSteps.SendUpdate(workflowsteps.UpdateCompleted{
-				ID:          stepContext.Step.ID(),
-				CompletedAt: time.Now(),
-				Status:      resultsreceiver.StatusCompleted,
-				Conclusion:  resultsreceiver.ConclusionSuccess,
-			})
+			c.workflowSteps.EventStatusCompleted(stepContext.Step.ID(), time.Now(), resultsreceiver.ConclusionSuccess)
 
 			// end span
 			stepContext.Span.End()

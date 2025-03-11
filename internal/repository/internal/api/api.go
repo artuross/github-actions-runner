@@ -154,6 +154,7 @@ func (w *Wrapper) UnmarshalJSON(data []byte) error {
 					ID:          is.Id,
 					ContextName: is.ContextName,
 					DisplayName: is.Name,
+					// DisplayNameFallback: is.Name,
 				}
 
 				steps = append(steps, step)

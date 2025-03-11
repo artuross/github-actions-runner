@@ -8,9 +8,6 @@ import (
 	"github.com/artuross/github-actions-runner/internal/commands/run/log/uploader"
 )
 
-// TODO: should be read from data
-const linesInLogFile = 10
-
 const LogFileMaxSize = 2 * 1024 * 1024 // 2MB
 
 type blobStorage interface {
@@ -46,9 +43,15 @@ func JobUploader(resultsClient jobResultsReceiver, blobStorageClient blobStorage
 				return fmt.Errorf("upload step log file: %w", err)
 			}
 
-			// TODO: calculate how many lines are in the log
+			lines := 0
+			for _, char := range chunk {
+				if char == '\n' {
+					lines++
+				}
+			}
+
 			// TODO: time.Now() should be configurable
-			if err := resultsClient.CreateJobLogsMetadata(ctx, jobRunID, jobID, linesInLogFile, time.Now()); err != nil {
+			if err := resultsClient.CreateJobLogsMetadata(ctx, jobRunID, jobID, lines, time.Now()); err != nil {
 				return fmt.Errorf("create step log metadata: %w", err)
 			}
 
@@ -69,9 +72,16 @@ func StepUploader(resultsClient stepResultsReceiver, blobStorageClient blobStora
 				return fmt.Errorf("upload step log file: %w", err)
 			}
 
-			// TODO: calculate how many lines are in the log
+			lines := 0
+			for _, char := range chunk {
+				if char == '\n' {
+					lines++
+				}
+			}
+
 			// TODO: time.Now() should be configurable
-			if err := resultsClient.CreateStepLogsMetadata(ctx, jobRunID, jobID, stepID, linesInLogFile, time.Now()); err != nil {
+
+			if err := resultsClient.CreateStepLogsMetadata(ctx, jobRunID, jobID, stepID, lines, time.Now()); err != nil {
 				return fmt.Errorf("create step log metadata: %w", err)
 			}
 
